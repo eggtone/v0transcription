@@ -1,36 +1,116 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# V0 Audio Transcription App
 
-## Getting Started
+This app provides audio transcription using Whisper models, both locally and through the Groq API.
 
-First, run the development server:
+## Features
 
+- Audio file upload and playback
+- Transcription using various Whisper models
+- Local transcription for smaller models (Tiny to Medium)
+- Cloud-based transcription via Groq for larger models
+- Multiple display modes for transcription results:
+  - Compact: All text in a single paragraph
+  - Segments: Each segment on a separate line
+  - Segments with Time: Timestamps shown for each segment
+- Copy and download transcription results
+
+## Model Options
+
+### Local Models (run on your machine)
+- Whisper Tiny (Fast)
+- Whisper Base
+- Whisper Small
+- Whisper Medium
+
+### Groq API Models (requires API key)
+- Distill Whisper - English Only (faster)
+- Whisper Large v3 - Multilingual
+- Whisper Large - Best Quality
+
+## Setup
+
+1. Clone the repository
+
+2. Install dependencies:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+3. Create a `.env` file in the root of your project with the following variables:
+```
+# API Keys
+OPENAI_API_KEY=your_openai_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+# API Base URLs
+GROQ_API_BASE_URL=https://api.groq.com/openai/v1
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Local Whisper Settings
+WHISPER_LOCAL_MODELS=tiny,base,small,medium
+```
 
-## Learn More
+4. Run the development server:
+```bash
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Local Whisper Requirements
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+To use local Whisper models, you need to have the OpenAI Whisper package installed:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+pip install openai-whisper
+```
 
-## Deploy on Vercel
+The first time you use a model, it will be downloaded automatically.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Display Modes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The application provides three different ways to view transcription results:
+
+1. **Compact Mode**: Shows all transcribed text in a single paragraph, ideal for reading or copying the entire content.
+
+2. **Segments Mode**: Breaks down the transcription into logical segments or sentences, each displayed on a separate line.
+
+3. **Segments with Time Mode**: Adds timestamps to each segment, showing when in the audio each segment occurs. Format: `[MM:SS] Text segment`.
+
+You can toggle between these modes without having to re-transcribe your audio.
+
+## API Endpoints
+
+### POST /api/transcribe
+
+Transcribes an audio file using the specified model.
+
+**Request Body**:
+- `file`: The audio file to transcribe
+- `model`: The model to use for transcription (e.g., `whisper-tiny`, `groq-whisper-large-v3`)
+
+**Response**:
+```json
+{
+  "transcription": {
+    "text": "The complete transcribed text",
+    "segments": [
+      {
+        "id": 0,
+        "start": 0.0,
+        "end": 5.0,
+        "text": "A segment of the transcription"
+      },
+      // Additional segments...
+    ],
+    "language": "en"
+  }
+}
+```
+
+## Supported Groq Models
+
+According to Groq documentation, the following models are supported:
+- `distil-whisper-large-v3-en` - Optimized for English, faster processing
+- `whisper-large-v3` - Full multilingual support
+
+## License
+
+MIT
