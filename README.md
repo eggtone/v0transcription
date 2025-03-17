@@ -10,7 +10,7 @@ This app provides audio transcription using Whisper models, both locally and thr
 - Cloud-based transcription via Groq for larger models
 - Multiple display modes for transcription results:
   - Compact: All text in a single paragraph
-  - Segments: Each segment on a separate line
+  - Segments: Each transcribed segment on a separate line with accurate timestamps
   - Segments with Time: Timestamps shown for each segment
 - Copy and download transcription results
 
@@ -70,7 +70,7 @@ The application provides three different ways to view transcription results:
 
 1. **Compact Mode**: Shows all transcribed text in a single paragraph, ideal for reading or copying the entire content.
 
-2. **Segments Mode**: Breaks down the transcription into logical segments or sentences, each displayed on a separate line.
+2. **Segments Mode**: Displays each transcribed segment on a separate line. These segments are directly from the transcription model with accurate timestamps.
 
 3. **Segments with Time Mode**: Adds timestamps to each segment, showing when in the audio each segment occurs. Format: `[MM:SS] Text segment`.
 

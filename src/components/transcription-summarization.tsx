@@ -23,6 +23,7 @@ import { cn } from "@/utils"
 interface TranscriptionSummarizationProps {
   transcriptionText: string
   isLoading: boolean
+  audioFileName?: string
 }
 
 type OpenAIModel = "gpt-4o-mini" | "gpt-4o"
@@ -31,6 +32,7 @@ type SummaryDisplayMode = "original" | "edit"
 export function TranscriptionSummarization({
   transcriptionText,
   isLoading,
+  audioFileName,
 }: TranscriptionSummarizationProps) {
   // State for user selections
   const [model, setModel] = useState<OpenAIModel>("gpt-4o-mini")
@@ -132,7 +134,16 @@ export function TranscriptionSummarization({
     const element = document.createElement("a")
     const file = new Blob([textToDownload], { type: "text/plain" })
     element.href = URL.createObjectURL(file)
-    element.download = "transcription-summary.txt"
+    
+    // Use the audio file name if provided, otherwise use a default name
+    if (audioFileName) {
+      // Remove file extension and add "_summary.txt"
+      const baseName = audioFileName.replace(/\.[^/.]+$/, "")
+      element.download = `${baseName}_summary.txt`
+    } else {
+      element.download = "transcription-summary.txt"
+    }
+    
     document.body.appendChild(element)
     element.click()
     document.body.removeChild(element)

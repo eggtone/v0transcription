@@ -48,11 +48,11 @@ export async function transcribeAudio(
     console.log('Running Whisper with MPS (GPU) acceleration on Apple Silicon using patched backend with fp16 disabled');
     // Use the patched script to work around sparse tensor issues
     const mpsScript = path.join(process.cwd(), 'whisper_mps.py');
-    whisperCommand = `python3 "${mpsScript}" "${audioPath}" --model ${model} --output_dir "${outputDir}" --output_format txt --device mps --fp16 False --benchmark`;
+    whisperCommand = `python3 "${mpsScript}" "${audioPath}" --model ${model} --output_dir "${outputDir}" --output_format json --device mps --fp16 False --benchmark`;
   } else {
     console.log(`Running Whisper with CPU mode (${useGpu ? 'GPU requested but not available on this system' : 'CPU requested'})`);
     const whisperPath = path.join(os.homedir(), 'Library/Python/3.9/bin/whisper');
-    whisperCommand = `${whisperPath} "${audioPath}" --model ${model} --output_dir "${outputDir}" --output_format txt --device cpu`;
+    whisperCommand = `${whisperPath} "${audioPath}" --model ${model} --output_dir "${outputDir}" --output_format json --device cpu`;
   }
   
   try {
@@ -74,15 +74,33 @@ export async function transcribeAudio(
     
     // Get the output file path
     const fileExt = path.extname(audioPath);
-    const transcriptionFilePath = audioPath.replace(fileExt, '.txt');
+    const transcriptionFilePath = audioPath.replace(fileExt, '.json');
     
     // Read the transcription content
-    const transcription = fs.existsSync(transcriptionFilePath) 
-      ? fs.readFileSync(transcriptionFilePath, 'utf-8')
-      : '';
+    let transcription = '';
+    let segments = [];
+    
+    if (fs.existsSync(transcriptionFilePath)) {
+      try {
+        const jsonContent = fs.readFileSync(transcriptionFilePath, 'utf-8');
+        const jsonData = JSON.parse(jsonContent);
+        
+        // Extract the full text
+        transcription = jsonData.text || '';
+        
+        // Extract segments with timestamps
+        segments = jsonData.segments || [];
+        
+        console.log(`Loaded JSON transcription with ${segments.length} segments`);
+      } catch (err) {
+        console.error('Error parsing JSON transcription:', err);
+        transcription = '';
+      }
+    }
     
     return {
       transcription,
+      segments,
       outputPath: transcriptionFilePath,
       processingTime
     };
@@ -93,7 +111,7 @@ export async function transcribeAudio(
     if (isAppleSilicon) {
       console.log('Falling back to CPU processing after GPU error');
       const whisperPath = path.join(os.homedir(), 'Library/Python/3.9/bin/whisper');
-      const cpuCommand = `${whisperPath} "${audioPath}" --model ${model} --output_dir "${outputDir}" --output_format txt --device cpu`;
+      const cpuCommand = `${whisperPath} "${audioPath}" --model ${model} --output_dir "${outputDir}" --output_format json --device cpu`;
       
       try {
         const startTime = Date.now();
@@ -109,15 +127,33 @@ export async function transcribeAudio(
         
         // Get the output file path
         const fileExt = path.extname(audioPath);
-        const transcriptionFilePath = audioPath.replace(fileExt, '.txt');
+        const transcriptionFilePath = audioPath.replace(fileExt, '.json');
         
         // Read the transcription content
-        const transcription = fs.existsSync(transcriptionFilePath) 
-          ? fs.readFileSync(transcriptionFilePath, 'utf-8')
-          : '';
+        let transcription = '';
+        let segments = [];
+        
+        if (fs.existsSync(transcriptionFilePath)) {
+          try {
+            const jsonContent = fs.readFileSync(transcriptionFilePath, 'utf-8');
+            const jsonData = JSON.parse(jsonContent);
+            
+            // Extract the full text
+            transcription = jsonData.text || '';
+            
+            // Extract segments with timestamps
+            segments = jsonData.segments || [];
+            
+            console.log(`Loaded JSON transcription with ${segments.length} segments`);
+          } catch (err) {
+            console.error('Error parsing JSON transcription:', err);
+            transcription = '';
+          }
+        }
         
         return {
           transcription,
+          segments,
           outputPath: transcriptionFilePath,
           processingTime,
           usedFallback: true

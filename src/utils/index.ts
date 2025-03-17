@@ -116,11 +116,15 @@ export function extractTimestamp(text: string): { timestamp: number | null, clea
  */
 function createSegment(text: string, index: number): TranscriptionSegment {
   const { timestamp, cleanText } = extractTimestamp(text)
-  const start = timestamp !== null ? timestamp : index * 2 // Use extracted timestamp or estimate 2s per segment
   
-  // Calculate end time based on text length (roughly 0.3s per word)
+  // If we have an explicit timestamp from the text, use it
+  // Otherwise, we'll use a more conservative estimate that doesn't inflate the total duration
+  const start = timestamp !== null ? timestamp : index * 1 // Use extracted timestamp or estimate 1s per segment
+  
+  // Calculate end time based on text length (roughly 0.15s per word)
+  // This is a more conservative estimate to avoid inflating the total duration
   const wordCount = cleanText.split(/\s+/).length
-  const estimatedDuration = Math.max(1, wordCount * 0.3) // At least 1 second duration
+  const estimatedDuration = Math.max(0.5, wordCount * 0.15) // At least 0.5 second duration
   const end = start + estimatedDuration
   
   return {

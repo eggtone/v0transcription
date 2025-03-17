@@ -157,12 +157,22 @@ async function handleLocalTranscription(
     timeoutPromise
   ]);
   
-  // Create detailed transcription from raw text
-  const compactText = result.transcription.replace(/\n+/g, ' ').trim();
-  const detailedTranscription = createSegmentsFromText(result.transcription);
+  // Create detailed transcription
+  let detailedTranscription: DetailedTranscription;
   
-  // Set the compact text
-  detailedTranscription.text = compactText;
+  // If we have segments from Whisper JSON output, use them
+  if (result.segments && result.segments.length > 0) {
+    console.log(`Using ${result.segments.length} segments from Whisper JSON output`);
+    detailedTranscription = {
+      text: result.transcription,
+      segments: result.segments,
+      language: 'en'
+    };
+  } else {
+    // Fallback to creating segments from raw text
+    console.log('No segments in Whisper output, creating from text');
+    detailedTranscription = createSegmentsFromText(result.transcription);
+  }
   
   // Add processing time information if available
   if (result.processingTime) {

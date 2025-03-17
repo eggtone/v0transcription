@@ -460,7 +460,8 @@ export default function AudioTranscription() {
             <CardContent>
               <TranscriptionDisplay 
                 transcriptionData={transcriptionData} 
-                onTextUpdate={handleTranscriptionTextUpdate} 
+                onTextUpdate={handleTranscriptionTextUpdate}
+                audioFileName={audioFileName}
               />
             </CardContent>
           </Card>
@@ -479,6 +480,7 @@ export default function AudioTranscription() {
               <TranscriptionSummarization 
                 transcriptionText={formattedTranscriptionText} 
                 isLoading={isTranscribing}
+                audioFileName={audioFileName}
               />
             </CardContent>
           </Card>

@@ -10,11 +10,13 @@ import { formatTimestamp } from "@/utils"
 interface TranscriptionDisplayProps {
   transcriptionData: DetailedTranscription
   onTextUpdate?: (text: string) => void
+  audioFileName?: string
 }
 
 export function TranscriptionDisplay({ 
   transcriptionData, 
-  onTextUpdate 
+  onTextUpdate,
+  audioFileName
 }: TranscriptionDisplayProps) {
   const [displayMode, setDisplayMode] = useState<DisplayMode>("segments")
   const [editedContent, setEditedContent] = useState<string>("")
@@ -75,7 +77,16 @@ export function TranscriptionDisplay({
     const element = document.createElement("a")
     const file = new Blob([textToDownload], { type: "text/plain" })
     element.href = URL.createObjectURL(file)
-    element.download = "transcription.txt"
+    
+    // Use the audio file name if provided, otherwise use a default name
+    if (audioFileName) {
+      // Remove file extension and add "_transcription.txt"
+      const baseName = audioFileName.replace(/\.[^/.]+$/, "")
+      element.download = `${baseName}_transcription.txt`
+    } else {
+      element.download = "transcription.txt"
+    }
+    
     document.body.appendChild(element)
     element.click()
     document.body.removeChild(element)

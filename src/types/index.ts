@@ -46,6 +46,7 @@ export interface ApiClient {
  */
 export interface WhisperTranscriptionResult {
   transcription: string;
+  segments?: TranscriptionSegment[];  // Segments with timestamps from JSON output
   outputPath: string;
   processingTime?: number;  // Time taken to process in seconds
   usedFallback?: boolean;   // Whether CPU fallback was used
