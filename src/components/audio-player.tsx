@@ -67,8 +67,25 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
               const seconds = parseInt(match[2]);
               setDuration(minutes * 60 + seconds);
             } else {
-              // Default to 30 seconds if we can't determine duration
-              setDuration(30);
+              // Check if the duration is in the audio filename with format "duration-5:55"
+              const durationMatch = audioFileName.match(/duration[- _](\d+):(\d+)/i);
+              if (durationMatch) {
+                const minutes = parseInt(durationMatch[1]);
+                const seconds = parseInt(durationMatch[2]);
+                setDuration(minutes * 60 + seconds);
+              } else {
+                // If we know it's a YouTube video by URL pattern, try to estimate duration from transcription data
+                const ytMatch = audioUrl.includes('/api/youtube/audio/');
+                if (ytMatch) {
+                  // For YouTube videos, use a longer default duration as they're usually longer than 30 seconds
+                  // Use 10 minutes as default for YouTube content since most content is at least a few minutes
+                  console.log("YouTube audio detected, using extended default duration");
+                  setDuration(600); // 10 minutes (600 seconds)
+                } else {
+                  // Default to 30 seconds if we can't determine duration
+                  setDuration(30);
+                }
+              }
             }
           }
           

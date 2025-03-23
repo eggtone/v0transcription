@@ -8,12 +8,13 @@ export async function GET(
   { params }: { params: { videoId: string } }
 ) {
   try {
-    // Access the videoId directly from params
-    if (!params.videoId) {
+    // Properly destructure videoId from params
+    const { videoId } = params;
+    
+    // Validate videoId
+    if (!videoId) {
       return NextResponse.json({ error: "No video ID provided" }, { status: 400 });
     }
-    
-    const videoId = params.videoId;
     
     // Get the file path
     const tempDir = os.tmpdir();
@@ -27,6 +28,7 @@ export async function GET(
       const headers = new Headers();
       headers.set('Content-Type', 'audio/mpeg');
       headers.set('Content-Disposition', `inline; filename="${videoId}.mp3"`); // inline for browser playback
+      headers.set('Content-Length', fileBuffer.length.toString()); // Add content-length for better player support
       headers.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
       
       // Return the file

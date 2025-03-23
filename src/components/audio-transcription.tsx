@@ -132,7 +132,8 @@ export default function AudioTranscription() {
       
       // Set the audio URL and filename
       setAudioUrl(data.videoInfo.audioUrl)
-      setAudioFileName(data.videoInfo.title)
+      // Include duration in the filename for the audio player to detect
+      setAudioFileName(`${data.videoInfo.title} (duration-${data.videoInfo.duration})`)
       
       // Reset the audio file since we're using a direct URL
       setAudioFile(null)
