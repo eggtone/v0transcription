@@ -1,13 +1,81 @@
 import OpenAI from 'openai';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-import { v4 as uuidv4 } from 'uuid';
-import { ApiClient, DetailedTranscription } from '@/types';
+import { ApiClient, DetailedTranscription, TranscriptionSegment } from '@/types';
 import { createSegmentsFromText } from '@/utils';
+import { AudioPart } from '@/utils/audio-utils';
+
+/**
+ * Transcribe audio using either the server API or directly with client-side libraries
+ * This is the main function that will be used by the UI
+ */
+export async function transcribeAudio(
+  source: File | AudioPart[] | null,
+  model: string,
+  language: string = 'en',
+  onProgress?: (progress: number) => void
+): Promise<DetailedTranscription> {
+  if (!source) {
+    throw new Error('No audio source provided');
+  }
+
+  try {
+    // Set initial progress if callback provided
+    if (onProgress) onProgress(10);
+    
+    // Determine if we're dealing with parts or a single file
+    if (Array.isArray(source)) {
+      // Handle audio parts - this requires server-side processing
+      // This should be handled by processAudioParts in audio-split-utils.ts
+      // Here we just throw an informative error
+      throw new Error('Audio parts should be processed using processSplitAudioParts utility');
+    } else {
+      // Single file case
+      console.log(`Transcribing single file: ${source.name} with model: ${model}`);
+      
+      const formData = new FormData();
+      formData.append("file", source);
+      formData.append("model", model);
+      formData.append("language", language);
+      
+      // Update progress
+      if (onProgress) onProgress(20);
+      
+      // Make a request to our API endpoint
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to transcribe audio");
+      }
+      
+      // Update progress
+      if (onProgress) onProgress(80);
+
+      const data = await response.json();
+      
+      // Ensure we have segments - create them if not provided
+      if (!data.transcription.segments || data.transcription.segments.length === 0) {
+        console.log('No segments in response, creating from text');
+        const textSegments = createSegmentsFromText(data.transcription.text);
+        data.transcription.segments = textSegments.segments;
+      }
+      
+      // Complete progress
+      if (onProgress) onProgress(100);
+      
+      return data.transcription;
+    }
+  } catch (error) {
+    console.error('Error in transcribeAudio:', error);
+    throw error;
+  }
+}
 
 /**
  * Groq client for whisper models
+ * Note: This client runs on the server side only
  */
 export class GroqClient implements ApiClient {
   private client: OpenAI;
@@ -38,98 +106,59 @@ export class GroqClient implements ApiClient {
     try {
       console.log(`Using Groq with model: ${this.model}`);
       
+      if (!process.env.GROQ_API_KEY) {
+        throw new Error('GROQ_API_KEY is not set. Please add it to your environment variables.');
+      }
+      
+      // We need to convert the buffer to a format that OpenAI client can use
+      // For Node.js environment, we can create a ReadStream from the buffer
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      
       // Create a temporary file to store the audio data
-      const tmpDir = path.join(os.tmpdir(), 'groq-temp');
-      if (!fs.existsSync(tmpDir)) {
-        fs.mkdirSync(tmpDir, { recursive: true });
+      const tempDir = path.join(os.tmpdir(), 'groq-temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
       }
       
-      // Ensure the file has a valid audio extension that Groq accepts
-      const validExtensions = ['.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm', '.flac', '.ogg', '.opus'];
-      let fileExtension = path.extname(filename).toLowerCase();
-      
-      // If no extension or invalid extension, default to .mp3
-      if (!fileExtension || !validExtensions.includes(fileExtension)) {
-        fileExtension = '.mp3';
-      }
-      
-      const tempFilePath = path.join(tmpDir, `${uuidv4()}${fileExtension}`);
+      const tempFilePath = path.join(tempDir, filename);
       fs.writeFileSync(tempFilePath, audioData);
       
-      console.log(`Saved audio to temporary file: ${tempFilePath}`);
-      
       try {
-        // Use the file path with OpenAI SDK
-        console.log(`Sending transcription request to Groq with model: ${this.model}`);
+        // Call the Groq API to transcribe the audio using the file path
+        const transcription = await this.client.audio.transcriptions.create({
+          file: fs.createReadStream(tempFilePath),
+          model: this.model,
+          response_format: 'verbose_json'
+        });
         
-        // First try with verbose_json to get segments
-        let response;
-        let hasSegments = false;
+        console.log('Groq transcription complete');
         
-        try {
-          response = await this.client.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePath),
-            model: this.model,
-            response_format: 'verbose_json',
-            temperature: 0.0
-          });
-          console.log('Transcription with verbose_json successful');
-          hasSegments = true;
-        } catch (error) {
-          console.log('verbose_json not supported, falling back to standard json', error);
-          // Fallback to standard json if verbose_json is not supported
-          response = await this.client.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePath),
-            model: this.model,
-            response_format: 'json',
-            temperature: 0.0
-          });
-          console.log('Transcription with json successful');
+        // Convert the Groq response to our DetailedTranscription format
+        const result: DetailedTranscription = {
+          text: transcription.text,
+          language: transcription.language || 'en',
+          segments: transcription.segments || [],
+          processingTime: 0  // Groq doesn't provide processing time
+        };
+        
+        // If no segments, create them from the text
+        if (!result.segments || result.segments.length === 0) {
+          console.log('No segments in Groq response, creating from text');
+          const textSegments = createSegmentsFromText(result.text);
+          result.segments = textSegments.segments;
         }
         
-        // Parse and return the detailed response
-        let detailedResponse: DetailedTranscription;
-        
-        if (typeof response === 'string') {
-          // If it's a string, assume it's a JSON string
-          try {
-            const parsedResponse = JSON.parse(response);
-            console.log('Parsed response:', Object.keys(parsedResponse));
-            
-            if (parsedResponse.segments && Array.isArray(parsedResponse.segments)) {
-              // We got segments directly
-              detailedResponse = parsedResponse as DetailedTranscription;
-            } else {
-              // We only got text, create manual segments
-              detailedResponse = createSegmentsFromText(parsedResponse.text || parsedResponse);
-            }
-          } catch (error) {
-            console.error('Error parsing response:', error);
-            // If parsing fails, treat as plain text
-            detailedResponse = createSegmentsFromText(response);
-          }
-        } else if (hasSegments && response && typeof response === 'object') {
-          // This might be the verbose_json response
-          if ('segments' in response && Array.isArray(response.segments)) {
-            detailedResponse = response as unknown as DetailedTranscription;
-          } else {
-            console.log('Response has no segments property:', response);
-            detailedResponse = createSegmentsFromText(response.text || '');
-          }
-        } else if (response && 'text' in response) {
-          // Handle the case when we get a simple text response
-          console.log('Got simple text response');
-          detailedResponse = createSegmentsFromText(response.text);
-        } else {
-          console.error('Unexpected response format:', response);
-          throw new Error('Unexpected response format from Groq API');
-        }
-        
-        return detailedResponse;
+        return result;
       } finally {
         // Clean up the temporary file
-        if (fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath);
+        try {
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
+        } catch (cleanupErr) {
+          console.error('Error cleaning up temp file:', cleanupErr);
         }
       }
     } catch (error) {
@@ -141,6 +170,7 @@ export class GroqClient implements ApiClient {
 
 /**
  * Factory function to create the appropriate client based on the model
+ * Note: This should only be used server-side
  */
 export function createApiClient(model: string): ApiClient {
   if (model.startsWith('groq-')) {
