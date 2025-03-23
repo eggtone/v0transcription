@@ -7,13 +7,29 @@ export interface YouTubeVideoInfo {
   audioUrl: string;
   thumbnailUrl: string;
   duration: string;
+  fileSize?: number; // Add file size for download progress tracking
+  extractionTime: number;
 }
 
 /**
  * Extract audio from a YouTube video URL
+ * @param youtubeUrl The YouTube URL to extract audio from
+ * @param onProgress Optional callback for progress updates
  */
-export async function extractYouTubeAudio(youtubeUrl: string): Promise<YouTubeVideoInfo> {
+export async function extractYouTubeAudio(
+  youtubeUrl: string, 
+  onProgress?: (progress: { elapsed: number }) => void
+): Promise<YouTubeVideoInfo> {
   try {
+    // Start timing the extraction
+    const startTime = Date.now();
+    const progressInterval = setInterval(() => {
+      if (onProgress) {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        onProgress({ elapsed });
+      }
+    }, 1000);
+
     // Call our API endpoint
     const response = await fetch("/api/youtube/extract", {
       method: "POST",
@@ -23,13 +39,24 @@ export async function extractYouTubeAudio(youtubeUrl: string): Promise<YouTubeVi
       body: JSON.stringify({ url: youtubeUrl }),
     });
 
+    // Clear the progress interval
+    clearInterval(progressInterval);
+    
+    // Calculate final elapsed time
+    const totalElapsed = Math.floor((Date.now() - startTime) / 1000);
+    
     if (!response.ok) {
       const errorData = await response.json();
       throw new Error(errorData.error || "Failed to extract audio from YouTube video");
     }
 
     const data = await response.json();
-    return data.videoInfo;
+    
+    // Add total processing time to the data returned
+    return {
+      ...data.videoInfo,
+      extractionTime: totalElapsed
+    };
   } catch (error) {
     console.error("YouTube extraction error:", error);
     throw error;
