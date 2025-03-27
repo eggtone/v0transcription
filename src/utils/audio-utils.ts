@@ -34,38 +34,53 @@ export interface AudioPart {
 
 /**
  * Quality settings for MP3 Variable Bitrate (VBR)
- * These correspond to the FFmpeg -q:a values
+ * These correspond to the FFmpeg -q:a values and specific bitrates
  */
 export enum MP3Quality {
   HIGH = 1,      // High quality (roughly equivalent to 220-260 kbps)
-  MEDIUM = 2,    // Medium quality (roughly equivalent to 170-210 kbps)
+  KBPS_192 = 2,  // 192 kbps
+  KBPS_128 = 3,  // 128 kbps
   LOW = 5,       // Low quality (roughly equivalent to 120-150 kbps)
+  KBPS_64 = 8,   // 64 kbps
+  KBPS_32 = 9,   // 32 kbps
   VERY_LOW = 7   // Very low quality (roughly equivalent to 80-100 kbps)
 }
 
 // Human-friendly labels for MP3 quality levels
 export const MP3QualityLabels = {
   [MP3Quality.HIGH]: "High (VBR ~220-260 kbps)",
-  [MP3Quality.MEDIUM]: "Medium (VBR ~170-210 kbps)",
+  [MP3Quality.KBPS_192]: "192 kbps",
+  [MP3Quality.KBPS_128]: "128 kbps",
   [MP3Quality.LOW]: "Low (VBR ~120-150 kbps)",
+  [MP3Quality.KBPS_64]: "64 kbps",
+  [MP3Quality.KBPS_32]: "32 kbps",
   [MP3Quality.VERY_LOW]: "Very Low (VBR ~80-100 kbps)"
 };
 
 // Descriptions for each quality level
 export const MP3QualityDescriptions = {
   [MP3Quality.HIGH]: "High quality audio with minimal compression artifacts",
-  [MP3Quality.MEDIUM]: "Good quality for most content, balanced file size",
+  [MP3Quality.KBPS_192]: "Good quality with reasonable file size (192 kbps)",
+  [MP3Quality.KBPS_128]: "Standard quality, good for most speech content (128 kbps)",
   [MP3Quality.LOW]: "Acceptable quality for speech content, smaller files",
+  [MP3Quality.KBPS_64]: "Reduced quality, very small files (64 kbps)",
+  [MP3Quality.KBPS_32]: "Minimum quality, smallest files (32 kbps)",
   [MP3Quality.VERY_LOW]: "Minimum quality for intelligible speech, smallest files"
 };
 
 // Estimated average bitrates for each quality level (for UI display only)
 export const MP3QualityBitrates = {
   [MP3Quality.HIGH]: 240000,    // ~240 kbps
-  [MP3Quality.MEDIUM]: 190000,  // ~190 kbps
+  [MP3Quality.KBPS_192]: 192000, // 192 kbps
+  [MP3Quality.KBPS_128]: 128000, // 128 kbps
   [MP3Quality.LOW]: 130000,     // ~130 kbps
+  [MP3Quality.KBPS_64]: 64000,  // 64 kbps
+  [MP3Quality.KBPS_32]: 32000,  // 32 kbps
   [MP3Quality.VERY_LOW]: 90000  // ~90 kbps
 };
+
+// Default quality to use when not specified
+export const DEFAULT_MP3_QUALITY = MP3Quality.KBPS_64;
 
 /**
  * Audio format options
@@ -89,7 +104,8 @@ export const AudioFormatMimeTypes = {
 export async function splitAudioFile(
   file: File, 
   numParts: number,
-  quality: MP3Quality = MP3Quality.LOW
+  quality: MP3Quality = MP3Quality.LOW,
+  onProgress?: (progress: number) => void
 ): Promise<AudioPart[]> {
   try {
     console.log(`Starting to split ${file.name} (${formatFileSize(file.size)}) into ${numParts} parts with FFmpeg, quality level: ${quality}`);
@@ -121,12 +137,22 @@ export async function splitAudioFile(
     console.log(`Received ${result.parts.length} split parts from server, total size: ${formatFileSize(result.totalSize)}`);
     
     // Convert the base64 data to blobs and create URL objects
-    const audioParts: AudioPart[] = result.parts.map((part: any) => {
+    const audioParts: AudioPart[] = [];
+    
+    for (let i = 0; i < result.parts.length; i++) {
+      const part = result.parts[i];
+      
+      // Calculate progress percentage
+      if (onProgress) {
+        const progress = Math.round((i / result.parts.length) * 100);
+        onProgress(progress);
+      }
+      
       // Convert base64 to binary
       const binaryString = atob(part.data);
       const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+      for (let j = 0; j < binaryString.length; j++) {
+        bytes[j] = binaryString.charCodeAt(j);
       }
       
       // Create blob
@@ -135,18 +161,54 @@ export async function splitAudioFile(
       // Create URL
       const url = URL.createObjectURL(blob);
       
-      return {
+      audioParts.push({
         blob,
         name: part.name,
         size: part.size,
         duration: part.duration,
         url
-      };
-    });
+      });
+    }
+    
+    // Set final progress to 100%
+    if (onProgress) {
+      onProgress(100);
+    }
     
     return audioParts;
   } catch (error) {
     console.error("Error splitting audio:", error);
     throw new Error(`Failed to split audio: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/**
+ * Get audio file duration in seconds
+ */
+export function getAudioDuration(url: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio();
+    
+    audio.addEventListener('loadedmetadata', () => {
+      if (audio.duration === Infinity) {
+        // Some browsers initially return Infinity for duration, need to start playback to get actual duration
+        audio.currentTime = 1e101;
+        audio.addEventListener('timeupdate', function getDuration() {
+          if (audio.duration !== Infinity) {
+            audio.removeEventListener('timeupdate', getDuration);
+            resolve(audio.duration);
+          }
+        });
+      } else {
+        resolve(audio.duration);
+      }
+    });
+    
+    audio.addEventListener('error', (e) => {
+      reject(new Error(`Error loading audio: ${e.message}`));
+    });
+    
+    audio.src = url;
+    audio.load();
+  });
 }

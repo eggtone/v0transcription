@@ -17,7 +17,8 @@ export interface TranscriptionState {
   setModel?: (model: string) => void;
   setElapsedTime?: (time: number) => void;
   setProcessingTime?: (time: string | null) => void;
-  elapsedTime?: number;
+  elapsedTime?: number | (() => number);  // Can be a number or a function that returns a number
+  getElapsedTime?: () => number;          // Function to get the current elapsed time
 }
 
 /**
@@ -87,9 +88,21 @@ export async function processTranscription(
       state.setDeviceType(deviceType);
     }
     
-    // Set processing time if setter and elapsed time exist
-    if (state.setProcessingTime && state.elapsedTime) {
-      const timeMessage = formatCompletionTime(state.elapsedTime, deviceType);
+    // Set processing time if setter exists
+    if (state.setProcessingTime) {
+      // Get elapsed time, which can be a function or a number
+      let elapsedSeconds = 0;
+      if (typeof state.elapsedTime === 'function') {
+        elapsedSeconds = state.elapsedTime();
+      } else if (typeof state.elapsedTime === 'number') {
+        elapsedSeconds = state.elapsedTime;
+      } else if (state.getElapsedTime) {
+        elapsedSeconds = state.getElapsedTime();
+      }
+      
+      // Use the processingTime from data if available, otherwise use elapsed time
+      const processingSeconds = data.processingTime || elapsedSeconds || 0;
+      const timeMessage = formatCompletionTime(processingSeconds, deviceType);
       state.setProcessingTime(timeMessage);
     }
 

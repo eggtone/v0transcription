@@ -1,6 +1,6 @@
 import { AudioPart } from "./audio-utils";
 import { toast } from "sonner";
-import { TranscriptionSegment } from "@/types";
+import { TranscriptionSegment, DetailedTranscription } from "@/types";
 import { createSegmentsFromText } from "@/utils";
 import { formatTime, formatCompletionTime } from "@/utils/time-utils";
 
@@ -11,13 +11,14 @@ export interface SplitAudioState {
   setIsTranscribingParts: (isTranscribing: boolean) => void;
   setIsTranscribing: (isTranscribing: boolean) => void;
   setError: (error: string | null) => void;
-  setElapsedTime: (time: number) => void;
-  setProcessingTime: (time: string | null) => void;
-  setTranscriptionData: (data: any | null) => void;
+  setElapsedTime: (elapsedSeconds: number) => void;
+  setProcessingTime: (processingTime: string | null) => void;
+  setTranscriptionData: (data: DetailedTranscription | null) => void;
   setFormattedTranscriptionText: (text: string) => void;
   setPartResults: (results: {text: string, processingTime: number}[]) => void;
   setCurrentPartIndex: (index: number) => void;
   setTranscriptionProgress: (progress: number) => void;
+  getElapsedTime?: () => number;
 }
 
 /**
@@ -46,11 +47,22 @@ export async function processSplitAudioParts(
   // Start timing
   const startTime = Date.now();
   
-  // Setup an interval to continuously update the elapsed time
-  const timerInterval = setInterval(() => {
-    const currentElapsed = Math.floor((Date.now() - startTime) / 1000);
-    state.setElapsedTime(currentElapsed);
-  }, 1000);
+  // If we have a getElapsedTime function, use that instead of our own timer
+  const getElapsedSeconds = () => {
+    if (state.getElapsedTime) {
+      return state.getElapsedTime();
+    }
+    return Math.floor((Date.now() - startTime) / 1000);
+  };
+  
+  // Setup an interval to continuously update the elapsed time if we don't have getElapsedTime
+  let timerInterval: NodeJS.Timeout | null = null;
+  if (!state.getElapsedTime) {
+    timerInterval = setInterval(() => {
+      const currentElapsed = Math.floor((Date.now() - startTime) / 1000);
+      state.setElapsedTime(currentElapsed);
+    }, 1000);
+  }
   
   try {
     let combinedText = "";
@@ -81,7 +93,7 @@ export async function processSplitAudioParts(
       formData.append("file", partFile);
       formData.append("model", model);
       
-      console.log(`Starting transcription of part ${i+1}/${audioParts.length} (${part.size} bytes)`);
+      console.log(`Starting transcription of part ${i+1}/${audioParts.length} (${part.size} bytes) with model: ${model}`);
       
       // Make a request to our API endpoint
       const response = await fetch(apiEndpoint, {
@@ -91,7 +103,12 @@ export async function processSplitAudioParts(
       
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to transcribe part ${i+1}`);
+        console.error(`API error for part ${i+1}:`, errorData);
+        const errorMessage = errorData.error || `Failed to transcribe part ${i+1}`;
+        if (errorMessage.includes("Unknown model option")) {
+          throw new Error(`Invalid model: "${model}". Make sure the model name is valid and properly prefixed (e.g., "groq-" for Groq API models).`);
+        }
+        throw new Error(errorMessage);
       }
       
       const data = await response.json();
@@ -112,8 +129,17 @@ export async function processSplitAudioParts(
         partResultsArray.push(partResult);
         state.setPartResults([...partResultsArray]);
         
-        // Update combined text
-        combinedText += (i > 0 ? "\n\n" : "") + `[Part ${i+1}]\n` + data.transcription.text;
+        // Update combined text - use single newline for better formatting
+        if (i > 0) {
+          // Add a single newline separator and the part label
+          // The part label is optional and can be commented out for cleaner output
+          combinedText += "\n" + data.transcription.text;
+          // If you prefer to keep part labels, use this instead:
+          // combinedText += "\n" + `[Part ${i+1}] ` + data.transcription.text;
+        } else {
+          // For the first part, just add the text
+          combinedText += data.transcription.text;
+        }
 
         // Process segments - adjust timestamps for each part based on its position
         if (data.transcription.segments && data.transcription.segments.length > 0) {
@@ -165,12 +191,12 @@ export async function processSplitAudioParts(
     state.setTranscriptionProgress(100);
     
     // Final update with complete data
-    const finalProcessingTime = Math.floor((Date.now() - startTime) / 1000);
-    const finalCombinedTranscription = {
+    const finalProcessingTime = getElapsedSeconds();
+    const finalCombinedTranscription: DetailedTranscription = {
       text: combinedText,
       language: "en",
-      segments: allSegments.length > 0 ? allSegments : createSegmentsFromText(combinedText),
-      processingTime: totalProcessingTime || finalProcessingTime,
+      segments: allSegments.length > 0 ? allSegments : createSegmentsFromText(combinedText).segments,
+      processingTime: totalProcessingTime > 0 ? totalProcessingTime : finalProcessingTime,
       usedGpu: model.includes("medium") || model.includes("large") || model.includes("groq")
     };
     
@@ -180,7 +206,13 @@ export async function processSplitAudioParts(
     // Display final processing time information
     const deviceType = model.startsWith('groq') ? 'Groq API' : (finalCombinedTranscription.usedGpu ? 'GPU' : 'CPU');
     
-    const timeMessage = formatCompletionTime(finalCombinedTranscription.processingTime, deviceType);
+    // Ensure we use a valid processing time 
+    const actualProcessingTime = 
+      finalCombinedTranscription.processingTime !== undefined && finalCombinedTranscription.processingTime > 0 
+        ? finalCombinedTranscription.processingTime 
+        : finalProcessingTime;
+    
+    const timeMessage = formatCompletionTime(actualProcessingTime, deviceType);
     state.setProcessingTime(timeMessage);
     toast.success(`All parts transcribed! ${timeMessage}`);
     
@@ -191,7 +223,9 @@ export async function processSplitAudioParts(
     return null;
   } finally {
     // Clear the timer interval
-    clearInterval(timerInterval);
+    if (timerInterval) {
+      clearInterval(timerInterval);
+    }
     
     // Ensure we always keep the progress at 100% when finished
     state.setTranscriptionProgress(100);

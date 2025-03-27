@@ -1,9 +1,16 @@
 # Active Context
 
 ## Current Focus
-The current focus of the V0 Audio Transcription App is on improving the accuracy and usability of the transcription functionality, particularly around timestamp handling and user experience enhancements.
+The current focus of the V0 Audio Transcription App is on improving the batch processing experience with enhanced progress tracking and UI enhancements that provide clearer feedback during the transcription process.
 
 ## Recent Changes
+
+### Batch Processing UI Improvements (2025-03-23)
+- Modified reprocessing buttons to always be visible but disabled during processing
+- Added detailed file splitting progress indicators showing completion percentage and elapsed time
+- Added per-part transcription timing display for multi-part file processing
+- Improved progress visualization with color-coded statuses for different processing phases
+- Enhanced audio-utils with progress callback support for file splitting operations
 
 ### Fix Timestamps in Transcription (2025-03-16)
 - Changed Whisper output format from TXT to JSON to get accurate timestamps
@@ -24,6 +31,12 @@ The current focus of the V0 Audio Transcription App is on improving the accuracy
 
 ## In-Progress Work
 
+### Batch Processing Enhancements
+- Implementing more detailed progress indicators for multi-stage processes
+- Adding timing information for all processing steps
+- Improving UI consistency across different processing states
+- Enhancing visibility of buttons and controls during processing
+
 ### Whisper Integration Improvements
 - Continuing to refine the local Whisper integration
 - Investigating Apple Silicon GPU support reliability
@@ -35,6 +48,11 @@ The current focus of the V0 Audio Transcription App is on improving the accuracy
 - Considering caching mechanisms for frequently accessed videos
 
 ## Pending Decisions
+
+### Progress Tracking Approach
+- Evaluating granularity of progress indicators (too much information vs. not enough)
+- Considering animated progress indicators for better visual feedback
+- Deciding on placement and styling of time-related information
 
 ### Transcription Model Selection
 - Evaluating additional Whisper model options
@@ -60,17 +78,22 @@ The current focus of the V0 Audio Transcription App is on improving the accuracy
 
 ## Next Steps
 
-1. **GPU Acceleration Improvements**
+1. **Further Batch Processing Improvements**
+   - Add more file information during processing (file type, size, estimated completion time)
+   - Implement cancellation for individual files during batch processing
+   - Add batch processing statistics (average time per file, success/failure rates)
+
+2. **GPU Acceleration Improvements**
    - Enhance stability of GPU-accelerated transcription
    - Add better error handling for GPU failures
    - Implement adaptive timeout based on file size
 
-2. **Usability Enhancements**
-   - Add bulk file processing capabilities
+3. **Usability Enhancements**
+   - Improve the visual distinction between different processing states
    - Implement progress indication for model downloads
    - Add ability to save and restore transcription sessions
 
-3. **Integration Opportunities**
+4. **Integration Opportunities**
    - Explore integration with other AI models for summarization
    - Consider adding translation capabilities
    - Investigate speech-to-text for real-time transcription 

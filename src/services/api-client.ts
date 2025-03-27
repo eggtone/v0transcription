@@ -86,11 +86,11 @@ export class GroqClient implements ApiClient {
     // According to Groq docs, only these models are supported:
     // - distil-whisper-large-v3-en (English only)
     // - whisper-large-v3 (Multilingual)
+    // - whisper-large-v3-turbo (Faster multilingual)
     const modelMap: Record<string, string> = {
-      'groq-distill-whisper': 'distil-whisper-large-v3-en',
+      'groq-distil-whisper': 'distil-whisper-large-v3-en',
       'groq-whisper-large-v3': 'whisper-large-v3',
-      'groq-whisper-large': 'whisper-large-v3' // Fallback to v3 as v2 is not listed in docs
-    };
+      'groq-whisper-large-v3-turbo': 'whisper-large-v3-turbo'    };
 
     this.model = modelMap[model] || 'whisper-large-v3';
     
@@ -110,55 +110,76 @@ export class GroqClient implements ApiClient {
         throw new Error('GROQ_API_KEY is not set. Please add it to your environment variables.');
       }
       
-      // We need to convert the buffer to a format that OpenAI client can use
-      // For Node.js environment, we can create a ReadStream from the buffer
-      const fs = require('fs');
-      const path = require('path');
-      const os = require('os');
-      
-      // Create a temporary file to store the audio data
-      const tempDir = path.join(os.tmpdir(), 'groq-temp');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
-      
-      const tempFilePath = path.join(tempDir, filename);
-      fs.writeFileSync(tempFilePath, audioData);
-      
-      try {
-        // Call the Groq API to transcribe the audio using the file path
-        const transcription = await this.client.audio.transcriptions.create({
-          file: fs.createReadStream(tempFilePath),
-          model: this.model,
-          response_format: 'verbose_json'
+      // For client-side, we need to use the API route
+      if (typeof window !== 'undefined') {
+        // We're on the client-side, so we need to use the API route
+        const formData = new FormData();
+        const blob = new Blob([audioData], { type: 'audio/wav' });
+        formData.append('file', blob, filename);
+        formData.append('model', this.model);
+        
+        const response = await fetch('/api/transcribe', {
+          method: 'POST',
+          body: formData,
         });
         
-        console.log('Groq transcription complete');
-        
-        // Convert the Groq response to our DetailedTranscription format
-        const result: DetailedTranscription = {
-          text: transcription.text,
-          language: transcription.language || 'en',
-          segments: transcription.segments || [],
-          processingTime: 0  // Groq doesn't provide processing time
-        };
-        
-        // If no segments, create them from the text
-        if (!result.segments || result.segments.length === 0) {
-          console.log('No segments in Groq response, creating from text');
-          const textSegments = createSegmentsFromText(result.text);
-          result.segments = textSegments.segments;
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to transcribe audio');
         }
         
-        return result;
-      } finally {
-        // Clean up the temporary file
+        return await response.json();
+      } else {
+        // We're on the server-side, so we can use the Groq API directly
+        // This code only runs on the server
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        
+        // Create a temporary file to store the audio data
+        const tempDir = path.join(os.tmpdir(), 'groq-temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        const tempFilePath = path.join(tempDir, filename);
+        fs.writeFileSync(tempFilePath, audioData);
+        
         try {
-          if (fs.existsSync(tempFilePath)) {
-            fs.unlinkSync(tempFilePath);
+          // Call the Groq API to transcribe the audio using the file path
+          const transcription = await this.client.audio.transcriptions.create({
+            file: fs.createReadStream(tempFilePath),
+            model: this.model,
+            response_format: 'verbose_json'
+          });
+          
+          console.log('Groq transcription complete');
+          
+          // Convert the Groq response to our DetailedTranscription format
+          const result: DetailedTranscription = {
+            text: transcription.text,
+            language: transcription.language || 'en',
+            segments: transcription.segments || [],
+            processingTime: 0  // Groq doesn't provide processing time
+          };
+          
+          // If no segments, create them from the text
+          if (!result.segments || result.segments.length === 0) {
+            console.log('No segments in Groq response, creating from text');
+            const textSegments = createSegmentsFromText(result.text);
+            result.segments = textSegments.segments;
           }
-        } catch (cleanupErr) {
-          console.error('Error cleaning up temp file:', cleanupErr);
+          
+          return result;
+        } finally {
+          // Clean up the temporary file
+          try {
+            if (fs.existsSync(tempFilePath)) {
+              fs.unlinkSync(tempFilePath);
+            }
+          } catch (cleanupErr) {
+            console.error('Error cleaning up temp file:', cleanupErr);
+          }
         }
       }
     } catch (error) {

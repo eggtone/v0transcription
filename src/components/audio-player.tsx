@@ -8,9 +8,16 @@ import { toast } from "sonner"
 interface AudioPlayerProps {
   audioUrl: string
   audioFileName: string
+  mini?: boolean
+  onRefreshUrl?: () => Promise<string>
 }
 
-export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
+export function AudioPlayer({ 
+  audioUrl, 
+  audioFileName, 
+  mini = false,
+  onRefreshUrl
+}: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -19,7 +26,123 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
   const [isMuted, setIsMuted] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [hasError, setHasError] = useState(false)
+  const [errorType, setErrorType] = useState<'blob' | 'network' | 'format' | 'unknown'>('unknown')
   const [retryCount, setRetryCount] = useState(0)
+  const [currentAudioUrl, setCurrentAudioUrl] = useState(audioUrl)
+  
+  // Add a ref to track the last time we refreshed the URL to prevent excessive refreshes
+  const lastRefreshTimeRef = useRef<number>(0)
+  const isRetryingRef = useRef<boolean>(false)
+  const MAX_RETRIES = 3
+
+  // Define handleRetry with useCallback to avoid dependency issues
+  const handleRetry = useCallback(async () => {
+    // Check if we're already retrying to prevent multiple simultaneous retries
+    if (isRetryingRef.current) {
+      console.log("Retry already in progress, skipping");
+      return;
+    }
+    
+    // Check if we've exceeded the retry count
+    if (retryCount >= MAX_RETRIES) {
+      console.log(`Already retried ${retryCount} times, not retrying again`);
+      return;
+    }
+    
+    // Check if we've refreshed recently (within the last 3 seconds)
+    const now = Date.now();
+    if (now - lastRefreshTimeRef.current < 3000) {
+      console.log("Recently refreshed, waiting before trying again");
+      return;
+    }
+    
+    isRetryingRef.current = true;
+    setIsLoading(true);
+    setHasError(false);
+    
+    try {
+      // If this is a blob URL and we have a refresh callback, try to refresh the URL
+      if (errorType === 'blob' && onRefreshUrl) {
+        // Don't show toast for every retry to avoid flooding the user
+        if (retryCount === 0) {
+          toast.info("Refreshing audio URL...");
+        }
+        
+        const newUrl = await onRefreshUrl();
+        lastRefreshTimeRef.current = Date.now();
+        
+        if (newUrl && newUrl !== currentAudioUrl) {
+          console.log("Refreshed URL from:", currentAudioUrl, "to:", newUrl);
+          setCurrentAudioUrl(newUrl);
+          setRetryCount(prev => prev + 1);
+          isRetryingRef.current = false;
+          return; // Return early as we'll re-initialize with the new URL
+        }
+      }
+      
+      // Otherwise just retry with current URL
+      if (audioRef.current) {
+        setRetryCount(prev => prev + 1);
+        
+        // Force reload the audio element
+        audioRef.current.load();
+        
+        if (retryCount === 0) {
+          toast.info("Attempting to reload audio...");
+        }
+        
+        // Add a small delay before attempting to play
+        setTimeout(() => {
+          if (audioRef.current) {
+            audioRef.current.play().catch(error => {
+              console.error("Retry play error:", error);
+              setHasError(true);
+              setIsLoading(false);
+              isRetryingRef.current = false;
+              
+              // Provide specific error message based on the error type
+              if (error instanceof DOMException) {
+                if (error.name === "NotSupportedError") {
+                  setErrorType('format');
+                  toast.error("Audio format not supported by your browser.");
+                } else if (error.name === "NotAllowedError") {
+                  toast.error("Playback not allowed. Try interacting with the page first.");
+                } else {
+                  toast.error("Unable to play audio: " + error.message);
+                }
+              } else {
+                toast.error("Still unable to load audio. Please check the source.");
+              }
+            });
+          }
+          isRetryingRef.current = false;
+        }, 1000);
+      }
+    } catch (error) {
+      console.error("Error in retry handler:", error);
+      setHasError(true);
+      setIsLoading(false);
+      isRetryingRef.current = false;
+      toast.error("Failed to retry audio playback.");
+    }
+  }, [errorType, onRefreshUrl, currentAudioUrl, retryCount]);
+
+  // Auto-retry for blob URL errors with debounce to prevent excessive retries
+  useEffect(() => {
+    // When we detect a blob error and we have a refresh callback, auto-retry
+    if (hasError && errorType === 'blob' && onRefreshUrl && retryCount < MAX_RETRIES) {
+      console.log(`Auto-retrying blob URL refresh (attempt ${retryCount + 1})`);
+      
+      // Use a delay that increases with each retry attempt
+      const retryDelay = 500 + (retryCount * 500); // 500ms, 1000ms, 1500ms...
+      
+      const retryTimeout = setTimeout(() => {
+        handleRetry();
+      }, retryDelay);
+      
+      return () => clearTimeout(retryTimeout);
+    }
+  }, [hasError, errorType, onRefreshUrl, handleRetry, retryCount]);
 
   // Reset state when audio URL changes
   useEffect(() => {
@@ -28,7 +151,10 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
     setDuration(0)
     setIsLoading(true)
     setHasError(false)
+    setErrorType('unknown')
     setRetryCount(0)
+    setCurrentAudioUrl(audioUrl)
+    isRetryingRef.current = false
   }, [audioUrl])
 
   useEffect(() => {
@@ -75,7 +201,7 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
                 setDuration(minutes * 60 + seconds);
               } else {
                 // If we know it's a YouTube video by URL pattern, try to estimate duration from transcription data
-                const ytMatch = audioUrl.includes('/api/youtube/audio/');
+                const ytMatch = currentAudioUrl.includes('/api/youtube/audio/');
                 if (ytMatch) {
                   // For YouTube videos, use a longer default duration as they're usually longer than 30 seconds
                   // Use 10 minutes as default for YouTube content since most content is at least a few minutes
@@ -103,13 +229,36 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
     const handleLoadedMetadata = () => {
       updateDuration();
       setIsLoading(false);
+      setHasError(false);
     };
     
     const handleError = (e: Event) => {
       console.error("Audio error:", e);
       setIsLoading(false);
       setHasError(true);
-      toast.error("Failed to load audio. Please try again.");
+      
+      // Determine error type for better error messages
+      if (currentAudioUrl.startsWith('blob:')) {
+        setErrorType('blob');
+        console.log("Blob URL error detected for:", currentAudioUrl);
+        
+        // Don't show toast for blob errors as we'll auto-retry
+        if (onRefreshUrl) {
+          // We'll auto-retry in useEffect, not here
+          console.log("Will auto-retry blob URL refresh");
+        } else {
+          toast.error("The audio URL has expired and cannot be refreshed automatically.");
+        }
+      } else if ((e.target as HTMLAudioElement).error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+        setErrorType('format');
+        toast.error("Audio format not supported by your browser.");
+      } else if ((e.target as HTMLAudioElement).error?.code === MediaError.MEDIA_ERR_NETWORK) {
+        setErrorType('network');
+        toast.error("Network error when loading audio. Check your connection.");
+      } else {
+        setErrorType('unknown');
+        toast.error("Failed to load audio. Please try again.");
+      }
     };
 
     audio.addEventListener('timeupdate', updateTime);
@@ -132,7 +281,7 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
       audio.removeEventListener('pause', handlePause);
       audio.removeEventListener('error', handleError);
     };
-  }, [audioUrl, audioFileName]);
+  }, [currentAudioUrl, audioFileName, errorType, onRefreshUrl]);
 
   const handlePlayPause = () => {
     if (audioRef.current) {
@@ -147,6 +296,13 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
           console.error("Play error:", error);
           toast.error("Failed to play audio. Please try again.");
           setHasError(true);
+          
+          // Check error type for better error handling
+          if (error.name === "NotSupportedError") {
+            setErrorType('format');
+          } else if (error.name === "NotAllowedError") {
+            toast.error("Playback not allowed. Try interacting with the page first.");
+          }
         });
       }
       setIsPlaying(!isPlaying);
@@ -214,36 +370,13 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
     }
   }
 
-  const handleRetry = () => {
-    if (audioRef.current && audioUrl) {
-      setIsLoading(true)
-      setHasError(false)
-      setRetryCount(prev => prev + 1)
-      
-      // Force reload the audio element
-      audioRef.current.load()
-      
-      // Add a small delay before attempting to play
-      setTimeout(() => {
-        if (audioRef.current) {
-          audioRef.current.play().catch(error => {
-            console.error("Retry play error:", error)
-            setHasError(true)
-            setIsLoading(false)
-            toast.error("Still unable to load audio. Please check the source.")
-          })
-        }
-      }, 1000)
-    }
-  }
-
   return (
     <div className="flex flex-col space-y-2 w-full">
       <audio 
         ref={audioRef} 
-        src={audioUrl} 
+        src={currentAudioUrl} 
         preload="metadata" 
-        key={`${audioUrl}-${retryCount}`}
+        key={`${currentAudioUrl}-${retryCount}`}
       />
       
       <div className="flex items-center space-x-2">
@@ -333,14 +466,25 @@ export function AudioPlayer({ audioUrl, audioFileName }: AudioPlayerProps) {
           )}
           <div>
             {isLoading ? "--:--" : formatTime(duration)}
-            {hasError && <span className="text-red-500 ml-2">(Error loading audio)</span>}
+            {hasError && (
+              <span className="text-red-500 ml-2">
+                (Error {errorType === 'blob' ? 'expired URL' : 'loading audio'})
+              </span>
+            )}
           </div>
         </div>
       </div>
       
       {hasError && (
         <div className="text-xs text-red-500 text-center mt-1">
-          Unable to load audio. Please check the source or try again.
+          {errorType === 'blob' 
+            ? "Audio URL has expired. Please use the 'Retry' button or try reprocessing the item."
+            : errorType === 'format'
+            ? "Audio format not supported by your browser."
+            : errorType === 'network'
+            ? "Network error loading audio. Check your connection."
+            : "Unable to load audio. Please check the source or try again."
+          }
         </div>
       )}
     </div>
