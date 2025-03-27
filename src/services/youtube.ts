@@ -1,6 +1,7 @@
 /**
  * Service for extracting audio from YouTube videos
  */
+import { MP3Quality, DEFAULT_MP3_QUALITY } from '@/utils/audio-utils';
 
 export interface YouTubeVideoInfo {
   title: string;
@@ -15,10 +16,12 @@ export interface YouTubeVideoInfo {
  * Extract audio from a YouTube video URL
  * @param youtubeUrl The YouTube URL to extract audio from
  * @param onProgress Optional callback for progress updates
+ * @param quality Optional audio quality setting (defaults to DEFAULT_MP3_QUALITY)
  */
 export async function extractYouTubeAudio(
   youtubeUrl: string, 
-  onProgress?: (progress: { elapsed: number }) => void
+  onProgress?: (progress: { elapsed: number }) => void,
+  quality: MP3Quality = DEFAULT_MP3_QUALITY
 ): Promise<YouTubeVideoInfo> {
   try {
     // Start timing the extraction
@@ -36,7 +39,10 @@ export async function extractYouTubeAudio(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ url: youtubeUrl }),
+      body: JSON.stringify({ 
+        url: youtubeUrl,
+        quality: quality 
+      }),
     });
 
     // Clear the progress interval
@@ -54,7 +60,7 @@ export async function extractYouTubeAudio(
     
     // Add total processing time to the data returned
     return {
-      ...data.videoInfo,
+      ...data,
       extractionTime: totalElapsed
     };
   } catch (error) {
@@ -79,4 +85,26 @@ export function extractVideoId(url: string): string | null {
   const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
   const match = url.match(regExp);
   return (match && match[7].length === 11) ? match[7] : null;
+}
+
+/**
+ * Extract playlist ID from a YouTube URL
+ */
+export function extractPlaylistId(url: string): string | null {
+  const match = url.match(/list=([^&]+)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Fetch information about a YouTube playlist
+ */
+export async function fetchPlaylistInfo(playlistId: string) {
+  const response = await fetch(`/api/youtube/playlist?id=${playlistId}`);
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || "Failed to fetch playlist information");
+  }
+  
+  return response.json();
 } 

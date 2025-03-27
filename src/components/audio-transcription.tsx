@@ -15,12 +15,12 @@ import { SectionNav } from "./ui/section-nav"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { isValidYouTubeUrl } from "@/services/youtube"
 import { AudioSplitter } from "./audio-splitter"
-import { AudioPart, formatFileSize, isWithinGroqSizeLimit } from "@/utils/audio-utils"
+import { AudioPart, formatFileSize, isWithinGroqSizeLimit, MP3Quality, DEFAULT_MP3_QUALITY } from "@/utils/audio-utils"
 import { AudioPlayer } from "./audio-player"
 import { toast } from "sonner"
 import { createSegmentsFromText } from "@/utils"
 import { Progress } from "@/components/ui/progress"
-import { formatTime, formatExtractionCompletionTime } from "@/utils/time-utils"
+import { formatTime, formatExtractionCompletionTime, ProcessTimer } from "@/utils/time-utils"
 import { 
   resetAudioSourceState, 
   processFileUpload, 
@@ -33,6 +33,7 @@ import {
   formatTranscriptionText
 } from "@/utils/transcription-utils"
 import { processSplitAudioParts } from "@/utils/audio-split-utils"
+import AudioQualitySelector from "./audio-quality-selector"
 
 export default function AudioTranscription() {
   const [audioFile, setAudioFile] = useState<File | null>(null)
@@ -47,7 +48,6 @@ export default function AudioTranscription() {
   // Timer state for transcription process
   const [elapsedTime, setElapsedTime] = useState<number>(0)
   const [processingTime, setProcessingTime] = useState<string | null>(null)
-  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
   // YouTube extraction state
   const [youtubeUrl, setYoutubeUrl] = useState<string>("")
@@ -70,6 +70,12 @@ export default function AudioTranscription() {
   const [transcriptionProgress, setTranscriptionProgress] = useState<number>(0);
   const [isTranscribingParts, setIsTranscribingParts] = useState<boolean>(false);
   const [partResults, setPartResults] = useState<{text: string, processingTime: number}[]>([]);
+
+  // Replace timerIntervalRef with ProcessTimer
+  const processTimerRef = useRef<ProcessTimer | null>(null);
+
+  // Add state for quality selection
+  const [selectedQuality] = useState<MP3Quality>(DEFAULT_MP3_QUALITY);
 
   // Define section navigation
   const sections = [
@@ -150,7 +156,8 @@ export default function AudioTranscription() {
         {
           setProgress: setExtractionProgress,
           setElapsedTime: setExtractionElapsedTime
-        }
+        },
+        selectedQuality
       )
       
       if (result && result.success) {
@@ -211,7 +218,30 @@ export default function AudioTranscription() {
     };
   }, [audioParts]);
 
-  // Modified handleTranscribe to support split audio parts and show progressive updates
+  // Initialize the ProcessTimer on component mount
+  useEffect(() => {
+    processTimerRef.current = new ProcessTimer((seconds) => {
+      setElapsedTime(seconds);
+    });
+
+    // Clean up timer on unmount
+    return () => {
+      if (processTimerRef.current) {
+        processTimerRef.current.cleanup();
+      }
+    };
+  }, []);
+
+  // Clean up audio URL when component unmounts
+  useEffect(() => {
+    return () => {
+      if (audioUrl && !youtubeVideoInfo) {
+        URL.revokeObjectURL(audioUrl);
+      }
+    };
+  }, [audioUrl, youtubeVideoInfo]);
+
+  // Modified handleTranscribe to use ProcessTimer
   const handleTranscribe = async () => {
     if (!audioUrl && !audioParts.length) {
       setError("Please select an audio file or extract from YouTube first");
@@ -220,12 +250,11 @@ export default function AudioTranscription() {
 
     // If we have split the audio into parts, transcribe each part in sequence
     if (audioParts.length > 0) {
-      // Start the timer
-      const startTime = Date.now();
-      timerIntervalRef.current = setInterval(() => {
-        const currentElapsed = Math.floor((Date.now() - startTime) / 1000);
-        setElapsedTime(currentElapsed);
-      }, 1000);
+      // Reset and start the timer
+      if (processTimerRef.current) {
+        processTimerRef.current.reset();
+        processTimerRef.current.start();
+      }
       
       try {
         // Create split audio state object
@@ -239,7 +268,8 @@ export default function AudioTranscription() {
           setFormattedTranscriptionText,
           setPartResults,
           setCurrentPartIndex,
-          setTranscriptionProgress
+          setTranscriptionProgress,
+          getElapsedTime: () => processTimerRef.current?.getElapsedSeconds() || 0
         };
         
         // Process split audio parts using the utility function
@@ -258,23 +288,24 @@ export default function AudioTranscription() {
         setError(`Error: ${err instanceof Error ? err.message : "Unknown error occurred"}`);
         // Keep progress at current level instead of resetting to 0
       } finally {
-        // Clear the timer interval
-        if (timerIntervalRef.current) {
-          clearInterval(timerIntervalRef.current);
-          timerIntervalRef.current = null;
+        // Stop the timer
+        if (processTimerRef.current) {
+          processTimerRef.current.stop();
         }
       }
     } else {
       // Use the utility function for single file transcription
       
-      // Start the timer for all models, including Groq API
-      const startTime = Date.now();
-      timerIntervalRef.current = setInterval(() => {
-        const currentElapsed = Math.floor((Date.now() - startTime) / 1000);
-        setElapsedTime(currentElapsed);
-      }, 1000);
+      // Reset and start the timer
+      if (processTimerRef.current) {
+        processTimerRef.current.reset();
+        processTimerRef.current.start();
+      }
 
       try {
+        // Get the accurate start time
+        const startTime = Date.now();
+        
         // Create transcription state object
         const transcriptionState: TranscriptionState = {
           setIsTranscribing,
@@ -283,13 +314,20 @@ export default function AudioTranscription() {
           setFormattedTranscriptionText,
           setError,
           setDeviceType: (type) => {
-            // Set processing time with device type
-            const minutes = Math.floor(elapsedTime / 60);
-            const seconds = elapsedTime % 60;
-            const timeMessage = `Processed in ${minutes}m ${seconds}s using ${type}`;
+            // Get the current accurate elapsed time
+            const currentElapsedTime = processTimerRef.current?.getElapsedSeconds() || 
+                                      Math.floor((Date.now() - startTime) / 1000);
+            
+            // Set processing time with device type and accurate elapsed time
+            const timeMessage = `Processed in ${formatTime(currentElapsedTime)} using ${type}`;
             setProcessingTime(timeMessage);
+            
+            // Update the elapsed time state
+            setElapsedTime(currentElapsedTime);
           },
-          setModel
+          setModel,
+          elapsedTime: () => processTimerRef.current?.getElapsedSeconds() || 0,
+          getElapsedTime: () => processTimerRef.current?.getElapsedSeconds() || 0
         };
 
         // Process transcription based on source
@@ -313,37 +351,18 @@ export default function AudioTranscription() {
         setError(`Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`);
         // Don't reset progress on error, keep it at current level
       } finally {
-        // Clear the timer interval
-        if (timerIntervalRef.current) {
-          clearInterval(timerIntervalRef.current);
-          timerIntervalRef.current = null;
+        // Stop the timer
+        if (processTimerRef.current) {
+          processTimerRef.current.stop();
         }
       }
     }
   };
 
-  // Format elapsed time for display - remove this and use the utility function
+  // Format elapsed time for display
   const formatElapsedTimeDisplay = (totalSeconds: number) => {
     return formatTime(totalSeconds, true);
   }
-
-  // Clean up timer on unmount
-  useEffect(() => {
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current)
-      }
-    }
-  }, [])
-
-  // Clean up the URL when component unmounts
-  useEffect(() => {
-    return () => {
-      if (audioUrl && !youtubeVideoInfo) {
-        URL.revokeObjectURL(audioUrl)
-      }
-    }
-  }, [audioUrl, youtubeVideoInfo])
 
   // Update formatted text when transcription data changes
   const handleTranscriptionTextUpdate = (text: string) => {
@@ -398,28 +417,37 @@ export default function AudioTranscription() {
               <TabsContent value="youtube" className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="youtube-url">YouTube Video URL</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="youtube-url"
-                      placeholder="https://www.youtube.com/watch?v=..."
-                      value={youtubeUrl}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setYoutubeUrl(e.target.value)}
-                    />
-                    <Button 
-                      onClick={handleYoutubeExtract} 
-                      disabled={isExtracting}
-                    >
-                      {isExtracting ? "Extracting..." : "Extract Audio"}
-                    </Button>
+                  <div className="flex flex-col space-y-2">
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="Enter YouTube URL"
+                        value={youtubeUrl}
+                        onChange={(e) => setYoutubeUrl(e.target.value)}
+                        className="flex-1"
+                        disabled={isExtracting}
+                      />
+                      <Button
+                        onClick={handleYoutubeExtract}
+                        disabled={isExtracting || !youtubeUrl.trim()}
+                      >
+                        {isExtracting ? "Extracting..." : "Extract Audio"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
                 
                 {isExtracting && (
-                  <div className="flex flex-col space-y-2">
-                    <p className="text-sm text-muted-foreground">
-                      {formatElapsedTimeDisplay(extractionElapsedTime)}
-                    </p>
-                    <Progress value={extractionProgress} className="h-2" />
+                  <div className="space-y-2">
+                    <Progress value={extractionProgress} />
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <div>
+                        {extractionElapsedTime > 0 && 
+                          `Extracting: ${formatExtractionCompletionTime(extractionElapsedTime, extractionProgress)}`
+                        }
+                      </div>
+                      <div>{extractionProgress}%</div>
+                    </div>
                   </div>
                 )}
                 
@@ -589,9 +617,9 @@ export default function AudioTranscription() {
                       </SelectGroup>
                       <SelectGroup>
                         <SelectLabel>Groq API Models (requires API key)</SelectLabel>
-                        <SelectItem value="groq-distil-whisper">Distill Whisper - English Only (faster)</SelectItem>
-                        <SelectItem value="groq-whisper-large-v3">Whisper Large v3 - Multilingual</SelectItem>
-                        <SelectItem value="groq-whisper-large">Whisper Large - Best Quality</SelectItem>
+                        <SelectItem value="groq-distil-whisper">Distil Whisper - English Only (faster)</SelectItem>
+                        <SelectItem value="groq-whisper-large-v3-turbo">Whisper Large v3 Turbo - Multilingual (faster)</SelectItem>
+                        <SelectItem value="groq-whisper-large-v3">Whisper Large v3 - Multilingual (higher quality)</SelectItem>
                       </SelectGroup>
                     </SelectContent>
                   </Select>

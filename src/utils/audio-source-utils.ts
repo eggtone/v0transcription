@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import { extractYouTubeAudio } from "@/services/youtube";
-import { formatFileSize } from "./audio-utils";
+import { formatFileSize, MP3Quality, DEFAULT_MP3_QUALITY } from "./audio-utils";
 import { formatTime, formatExtractionCompletionTime } from "@/utils/time-utils";
 
 /**
@@ -66,7 +66,8 @@ export function processFileUpload(
 export async function processYoutubeExtraction(
   youtubeUrl: string,
   state: AudioSourceState,
-  progressTracker: ProgressTracker
+  progressTracker: ProgressTracker,
+  quality: MP3Quality = DEFAULT_MP3_QUALITY
 ) {
   if (!state.setIsExtracting || !state.setYoutubeError || !state.setYoutubeVideoInfo) {
     throw new Error("Missing required state setters for YouTube extraction");
@@ -95,7 +96,7 @@ export async function processYoutubeExtraction(
       
       // Log progress for debugging
       console.log(`Extracting: ${formatTime(progress.elapsed)} (${estimatedPercent}%)`);
-    });
+    }, quality);
     
     // Set progress to complete
     progressTracker.setProgress(100);
@@ -123,7 +124,8 @@ export async function processYoutubeExtraction(
         success: true,
         file,
         url: videoInfo.audioUrl,
-        videoInfo
+        videoInfo,
+        quality
       };
     } catch (downloadError) {
       console.error("Error downloading audio file:", downloadError);
@@ -133,7 +135,8 @@ export async function processYoutubeExtraction(
         success: true,
         file: null,
         url: videoInfo.audioUrl,
-        videoInfo
+        videoInfo,
+        quality
       };
     }
   } catch (err) {
