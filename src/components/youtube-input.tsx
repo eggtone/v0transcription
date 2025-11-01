@@ -1,9 +1,19 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { MP3Quality, DEFAULT_MP3_QUALITY } from "@/utils/audio-utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface YoutubeInputProps {
   onVideoExtract: (url: string, videoId: string, quality: MP3Quality) => Promise<void>;
@@ -13,8 +23,11 @@ interface YoutubeInputProps {
 
 export function YoutubeInput({ onVideoExtract, onPlaylistExtract, disabled = false }: YoutubeInputProps) {
   const [url, setUrl] = useState<string>("");
-  const [extracting, setExtracting] = useState<boolean>(false);
   const [selectedQuality] = useState<MP3Quality>(DEFAULT_MP3_QUALITY);
+  
+  // State for the playlist confirmation dialog
+  const [showPlaylistDialog, setShowPlaylistDialog] = useState(false);
+  const playlistDataRef = useRef<{ url: string, videoId: string, playlistId: string } | null>(null);
 
   // Function to validate and extract YouTube video ID
   const extractVideoId = (url: string): string | null => {
@@ -41,24 +54,59 @@ export function YoutubeInput({ onVideoExtract, onPlaylistExtract, disabled = fal
     return match ? { videoId: match[1], playlistId: match[2] } : null;
   };
 
+  // Handle extracting entire playlist
+  const handleExtractPlaylist = async () => {
+    if (playlistDataRef.current) {
+      try {
+        await onPlaylistExtract(
+          playlistDataRef.current.url, 
+          playlistDataRef.current.playlistId, 
+          selectedQuality
+        );
+        setUrl("");
+      } catch (error) {
+        console.error("Error extracting playlist:", error);
+        toast.error(`Failed to extract playlist: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    setShowPlaylistDialog(false);
+  };
+
+  // Handle extracting just the current video
+  const handleExtractSingleVideo = async () => {
+    if (playlistDataRef.current) {
+      try {
+        await onVideoExtract(
+          playlistDataRef.current.url, 
+          playlistDataRef.current.videoId, 
+          selectedQuality
+        );
+        setUrl("");
+      } catch (error) {
+        console.error("Error extracting video:", error);
+        toast.error(`Failed to extract video: ${error instanceof Error ? error.message : "Unknown error"}`);
+      }
+    }
+    setShowPlaylistDialog(false);
+  };
+
   const handleExtract = async () => {
     if (!url.trim()) {
       toast.error("Please enter a YouTube URL");
       return;
     }
 
-    setExtracting(true);
     try {
       // Check for playlist with video
       const videoInPlaylist = isVideoInPlaylist(url);
       if (videoInPlaylist) {
-        // Ask user if they want just this video or the whole playlist
-        if (window.confirm("This URL contains both a video and a playlist. Do you want to extract the entire playlist?\n\nClick 'OK' for the entire playlist, or 'Cancel' for just this video.")) {
-          await onPlaylistExtract(url, videoInPlaylist.playlistId, selectedQuality);
-        } else {
-          await onVideoExtract(url, videoInPlaylist.videoId, selectedQuality);
-        }
-        setUrl("");
+        // Store the data and show the confirmation dialog
+        playlistDataRef.current = {
+          url,
+          videoId: videoInPlaylist.videoId,
+          playlistId: videoInPlaylist.playlistId
+        };
+        setShowPlaylistDialog(true);
         return;
       }
 
@@ -84,35 +132,60 @@ export function YoutubeInput({ onVideoExtract, onPlaylistExtract, disabled = fal
     } catch (error) {
       console.error("Error extracting YouTube audio:", error);
       toast.error(`Failed to extract audio: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setExtracting(false);
     }
   };
 
   return (
-    <div className="flex w-full flex-col gap-2">
-      <div className="flex w-full gap-2">
-        <Input
-          className="flex-1"
-          type="text"
-          placeholder="Enter YouTube video or playlist URL"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          disabled={disabled || extracting}
-        />
-        <Button disabled={disabled || extracting || !url.trim()} onClick={handleExtract}>
-          {extracting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Extracting...
-            </>
-          ) : (
-            "Add to Queue"
-          )}
-        </Button>
+    <>
+      <div className="flex w-full flex-col gap-2">
+        <div className="flex w-full gap-2">
+          <Input
+            className="flex-1"
+            type="text"
+            placeholder="Enter YouTube video or playlist URL"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={disabled}
+          />
+          <Button disabled={disabled || !url.trim()} onClick={handleExtract}>
+            Add to Queue
+          </Button>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Supports YouTube video links, shorts, and playlists. For videos in playlists, you'll be asked if you want to extract the entire playlist.
+        </div>
       </div>
-      <div className="text-xs text-muted-foreground">
-        Supports YouTube video links, shorts, and playlists. For videos in playlists, you'll be asked if you want to extract the entire playlist.
-      </div>
-    </div>
+
+      {/* Playlist confirmation dialog */}
+      <AlertDialog open={showPlaylistDialog} onOpenChange={(open) => {
+        setShowPlaylistDialog(open);
+      }}>
+        <AlertDialogContent className="max-w-md w-full p-4 sm:p-6">
+          <AlertDialogHeader className="pb-2">
+            <AlertDialogTitle>Playlist Detected</AlertDialogTitle>
+            <AlertDialogDescription className="text-sm pt-2">
+              This URL contains both a video and a playlist. Do you want to extract the entire playlist or just this single video?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="mt-4">
+            <AlertDialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+              <AlertDialogCancel className="mt-0" onClick={() => {
+                setShowPlaylistDialog(false);
+              }}>
+                Cancel
+              </AlertDialogCancel>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
+                <AlertDialogAction onClick={handleExtractSingleVideo} className="mt-0">
+                  Extract Single Video
+                </AlertDialogAction>
+                <AlertDialogAction onClick={handleExtractPlaylist} className="mt-0">
+                  Extract Entire Playlist
+                </AlertDialogAction>
+              </div>
+            </AlertDialogFooter>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 } 

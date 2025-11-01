@@ -110,28 +110,42 @@ export async function splitAudioFile(
   try {
     console.log(`Starting to split ${file.name} (${formatFileSize(file.size)}) into ${numParts} parts with FFmpeg, quality level: ${quality}`);
     
-    // Create form data for the API request
     const formData = new FormData();
     formData.append('file', file);
     formData.append('numParts', numParts.toString());
     formData.append('quality', quality.toString());
     
-    // Call the server-side API endpoint to perform the splitting
     const response = await fetch('/api/audio/split', {
       method: 'POST',
       body: formData
     });
     
+    // Improved error handling for non-OK responses
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Server error processing audio');
+      let errorDetail = `Server error processing audio (status ${response.status})`;
+      try {
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const errorData = await response.json();
+          errorDetail = errorData.error || errorData.message || errorDetail; 
+        } else {
+          // If not JSON, try to get text, but limit length
+          const textResponse = await response.text();
+          errorDetail = `${errorDetail}: ${textResponse.substring(0, 200)}${textResponse.length > 200 ? '...' : ''}`;
+        }
+      } catch (parseError) {
+        // Ignore parsing errors if the response wasn't JSON or text reading failed
+        console.error("Could not parse error response:", parseError);
+        errorDetail = `${errorDetail} (Could not parse response body)`;
+      }
+      throw new Error(errorDetail);
     }
     
-    // Parse the response data
+    // Parse the SUCCESS response data (assuming JSON)
     const result = await response.json();
     
     if (!result.success || !result.parts || !Array.isArray(result.parts)) {
-      throw new Error('Invalid response from server');
+      throw new Error('Invalid success response from server');
     }
     
     console.log(`Received ${result.parts.length} split parts from server, total size: ${formatFileSize(result.totalSize)}`);
@@ -178,7 +192,12 @@ export async function splitAudioFile(
     return audioParts;
   } catch (error) {
     console.error("Error splitting audio:", error);
-    throw new Error(`Failed to split audio: ${error instanceof Error ? error.message : String(error)}`);
+    // Ensure the error thrown includes the detail captured above
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("Failed to split audio:")) { // Avoid double prefixing
+      throw error;
+    }
+    throw new Error(`Failed to split audio: ${message}`);
   }
 }
 

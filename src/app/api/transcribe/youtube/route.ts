@@ -3,194 +3,140 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import axios from 'axios';
-import { transcribeAudio } from '@/services/whisper';
-import { createApiClient } from '@/services/api-client';
-import { DetailedTranscription } from '@/types';
-import { createSegmentsFromText } from '@/utils';
+import { v4 as uuidv4 } from 'uuid'; // For request ID
+import logger from '@/utils/logger'; // Import logger
+import { runTranscription } from '@/services/transcription-service';
+import { z } from "zod"; // Import Zod
 
-// Set timeouts for the transcription process
-const LOCAL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes for local models
-const GROQ_TIMEOUT_MS = 10 * 60 * 1000;  // 10 minutes for Groq models
+// Define Zod schema for expected FormData fields
+const TranscribeYoutubeSchema = z.object({
+  youtubeAudioUrl: z.string().min(1, "YouTube audio URL is required"),
+  // Add more specific URL validation if needed, e.g., using .url() or .regex()
+  title: z.string().min(1, "Title is required"),
+  model: z.string().min(1, "Model option is required"),
+});
 
+/**
+ * Handles YouTube transcription request using the centralized transcription service.
+ */
 export async function POST(request: NextRequest) {
-  console.log('YouTube Transcription API called');
+  const requestId = uuidv4();
+  const handlerLogger = logger.child({ requestId, route: '/api/transcribe/youtube' });
+
+  handlerLogger.info('YouTube transcription request received');
   
+  const tmpDir = path.join(os.tmpdir(), 'transcriptor-temp'); 
+  let audioFilePath: string | null = null;
+  let sourceAudioPath: string | null = null;
+
   try {
-    // Get form data from the request
-    const formData = await request.formData();
-    const youtubeAudioUrl = formData.get('youtubeAudioUrl') as string | null;
-    const title = formData.get('title') as string || 'youtube-audio';
-    const modelOption = formData.get('model') as string || 'whisper-tiny';
-
-    if (!youtubeAudioUrl) {
-      return NextResponse.json({ error: 'No YouTube audio URL provided' }, { status: 400 });
-    }
-
-    console.log(`Received YouTube transcription request with model: ${modelOption}`);
-    
-    // Create a temporary directory for processing files
-    const tmpDir = path.join(os.tmpdir(), 'whisper-temp');
     if (!fs.existsSync(tmpDir)) {
+      handlerLogger.debug({ path: tmpDir }, 'Creating temp directory');
       fs.mkdirSync(tmpDir, { recursive: true });
     }
 
-    // Create unique filenames based on timestamp
-    const timestamp = Date.now();
-    const audioFilePath = path.join(tmpDir, `youtube_audio_${timestamp}.mp3`);
+    const formData = await request.formData();
+    
+    // Extract data for validation
+    const youtubeAudioUrlValue = formData.get('youtubeAudioUrl');
+    const titleValue = formData.get('title');
+    const modelValue = formData.get('model');
 
-    // Check if the URL is a relative URL (starts with /)
+    // Validate using Zod
+    const validationResult = TranscribeYoutubeSchema.safeParse({
+      youtubeAudioUrl: typeof youtubeAudioUrlValue === 'string' ? youtubeAudioUrlValue : undefined,
+      title: typeof titleValue === 'string' ? titleValue : undefined,
+      model: typeof modelValue === 'string' ? modelValue : undefined,
+    });
+
+    if (!validationResult.success) {
+      handlerLogger.warn({ errors: validationResult.error.errors }, 'Invalid YouTube transcription request data');
+      const errorMessages = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+      return NextResponse.json(
+        { error: `Invalid request data: ${errorMessages}`, details: validationResult.error.flatten() },
+        { status: 400 }
+      );
+    }
+
+    // Use validated data
+    const { youtubeAudioUrl, title, model } = validationResult.data;
+
+    handlerLogger.info({ title, model, url: youtubeAudioUrl }, 'Processing validated YouTube transcription request');
+    
+    const timestamp = Date.now();
+    const uniqueId = `youtube_process_${requestId}_${timestamp}`;
+    audioFilePath = path.join(tmpDir, `${uniqueId}.mp3`);
+
     const isRelativeUrl = youtubeAudioUrl.startsWith('/');
     
-    // For relative URLs, we need to read the file directly from the file system
     if (isRelativeUrl) {
-      console.log(`Processing relative URL: ${youtubeAudioUrl}`);
+      handlerLogger.debug({ url: youtubeAudioUrl }, 'Processing relative YouTube URL');
       
-      // Extract the video ID from the URL
-      const videoIdMatch = youtubeAudioUrl.match(/\/api\/youtube\/audio\/([^\/]+)/);
-      if (!videoIdMatch || !videoIdMatch[1]) {
-        return NextResponse.json({ error: 'Invalid YouTube audio URL format' }, { status: 400 });
+      const fileMatch = youtubeAudioUrl.match(/[?&]file=([^&]+)/);
+      const sourceFileName = fileMatch ? fileMatch[1] : null;
+
+      if (!sourceFileName) {
+          handlerLogger.error({ url: youtubeAudioUrl }, 'Could not extract filename from relative URL');
+          return NextResponse.json({ error: 'Invalid relative YouTube audio URL format' }, { status: 400 });
+      }
+
+      sourceAudioPath = path.join(tmpDir, sourceFileName);
+      handlerLogger.debug({ path: sourceAudioPath }, 'Looking for source audio file');
+      
+      if (!fs.existsSync(sourceAudioPath)) {
+        handlerLogger.warn({ path: sourceAudioPath }, 'Source audio file not found in standard temp dir');
+        const oldSourceDir = path.join(process.cwd(), "tmp");
+        const oldSourceAudioPath = path.join(oldSourceDir, sourceFileName);
+        if (fs.existsSync(oldSourceAudioPath)) {
+             handlerLogger.warn({ path: oldSourceAudioPath }, 'Source audio file found in legacy temp dir. Copying.');
+             sourceAudioPath = oldSourceAudioPath;
+        } else {
+          handlerLogger.error({ path: sourceAudioPath, legacyPath: oldSourceAudioPath }, 'Extracted YouTube audio file not found in standard or legacy temp dir');
+          return NextResponse.json({ 
+            error: `Extracted YouTube audio file not found (${sourceFileName}). It might have been cleaned up or extraction failed.` 
+          }, { status: 404 });
+        }
       }
       
-      const videoId = videoIdMatch[1];
-      const tempDir = os.tmpdir();
-      const sourceFilePath = path.join(tempDir, `${videoId}.mp3`);
+      fs.copyFileSync(sourceAudioPath, audioFilePath);
+      handlerLogger.debug({ source: sourceAudioPath, destination: audioFilePath }, 'Audio copied to processing path');
       
-      // Check if the file exists
-      if (!fs.existsSync(sourceFilePath)) {
-        return NextResponse.json({ 
-          error: `Audio file not found: ${sourceFilePath}` 
-        }, { status: 404 });
-      }
-      
-      // Copy the file to our processing directory
-      fs.copyFileSync(sourceFilePath, audioFilePath);
-      console.log(`Audio copied from: ${sourceFilePath} to: ${audioFilePath}`);
     } else {
-      // Download the audio file from an absolute URL
-      console.log(`Downloading audio from: ${youtubeAudioUrl}`);
+      handlerLogger.debug({ url: youtubeAudioUrl }, 'Downloading audio from absolute URL');
       const response = await axios({
         method: 'GET',
         url: youtubeAudioUrl,
         responseType: 'arraybuffer'
       });
-
-      // Save file to disk
       fs.writeFileSync(audioFilePath, Buffer.from(response.data));
-      console.log(`Audio saved to: ${audioFilePath}`);
+      handlerLogger.debug({ path: audioFilePath, size: response.data.length }, 'Downloaded audio saved to processing path');
     }
 
-    let transcriptionResult: DetailedTranscription;
-    
-    try {
-      // Check if we should use local Whisper or Groq API
-      if (modelOption.startsWith('whisper-')) {
-        // Extract the model name from the option and check if GPU is requested
-        const isGpuModel = modelOption.endsWith('-gpu');
-        const baseModelOption = isGpuModel ? modelOption.replace('-gpu', '') : modelOption;
-        const model = baseModelOption.replace('whisper-', '');
-        
-        // Set a timeout for the transcription process
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`Transcription timed out after ${LOCAL_TIMEOUT_MS / 60000} minutes`));
-          }, LOCAL_TIMEOUT_MS);
-        });
-        
-        // Start the transcription with the appropriate device setting
-        const transcriptionPromise = transcribeAudio(
-          audioFilePath, 
-          model, 
-          tmpDir,
-          isGpuModel // Pass whether to use GPU
-        );
-        
-        // Race between transcription and timeout
-        const result = await Promise.race([
-          transcriptionPromise,
-          timeoutPromise
-        ]);
-        
-        // Create detailed transcription
-        // If we have segments from Whisper JSON output, use them
-        if (result.segments && result.segments.length > 0) {
-          console.log(`Using ${result.segments.length} segments from Whisper JSON output`);
-          transcriptionResult = {
-            text: result.transcription,
-            segments: result.segments,
-            language: 'en'
-          };
-        } else {
-          // Fallback to creating segments from raw text
-          console.log('No segments in Whisper output, creating from text');
-          transcriptionResult = createSegmentsFromText(result.transcription);
-        }
-        
-        // Add processing time information if available
-        if (result.processingTime) {
-          transcriptionResult.processingTime = result.processingTime;
-          transcriptionResult.usedGpu = isGpuModel && !result.usedFallback;
-        }
-        
-        // Clean up output file if it exists
-        try {
-          if (fs.existsSync(result.outputPath)) {
-            fs.unlinkSync(result.outputPath);
-          }
-        } catch (err) {
-          console.error('Error cleaning up output file:', err);
-        }
-      } else if (modelOption.startsWith('groq-')) {
-        // Use Groq API for transcription
-        const apiClient = createApiClient(modelOption);
-        const audioBuffer = fs.readFileSync(audioFilePath);
-        
-        // Set a timeout for the Groq API transcription
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`Groq API transcription timed out after ${GROQ_TIMEOUT_MS / 60000} minutes`));
-          }, GROQ_TIMEOUT_MS);
-        });
-        
-        // Race between transcription and timeout
-        transcriptionResult = await Promise.race([
-          apiClient.transcribeAudio(audioBuffer, title),
-          timeoutPromise
-        ]);
-      } else {
-        return NextResponse.json(
-          { error: `Unknown model option: ${modelOption}` },
-          { status: 400 }
-        );
-      }
-      
-      // Clean up temp file if it still exists
-      try {
-        if (fs.existsSync(audioFilePath)) {
-          fs.unlinkSync(audioFilePath);
-        }
-      } catch (err) {
-        console.error('Error cleaning up audio file:', err);
-      }
-      
-      return NextResponse.json({ transcription: transcriptionResult });
-    } catch (error) {
-      // Clean up temp file if it exists
-      try {
-        if (fs.existsSync(audioFilePath)) {
-          fs.unlinkSync(audioFilePath);
-        } 
-      } catch (err) {
-        console.error('Error cleaning up audio file:', err);
-      }
-      
-      throw error; // Rethrow for the outer catch block to handle
-    }
+    handlerLogger.debug('Calling transcription service');
+    const transcriptionResult = await runTranscription(
+      audioFilePath, 
+      title, 
+      model,
+      tmpDir 
+    );
+
+    handlerLogger.info({ title, model }, 'YouTube transcription successful');
+    return NextResponse.json({ transcription: transcriptionResult });
+
   } catch (error) {
-    console.error('Error in YouTube transcription:', error);
-    
+    handlerLogger.error({ err: error }, 'Error during YouTube transcription request');
     return NextResponse.json(
       { error: `YouTube transcription failed: ${(error as Error).message}` },
       { status: 500 }
     );
+  } finally {
+    if (audioFilePath && fs.existsSync(audioFilePath)) {
+      try {
+        fs.unlinkSync(audioFilePath);
+        handlerLogger.debug({ path: audioFilePath }, 'Cleaned up temporary processing file');
+      } catch (cleanupError) {
+        handlerLogger.warn({ path: audioFilePath, err: cleanupError }, 'Error cleaning up temporary processing file');
+      }
+    }
   }
 } 

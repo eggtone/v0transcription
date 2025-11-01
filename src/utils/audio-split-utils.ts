@@ -3,11 +3,22 @@ import { toast } from "sonner";
 import { TranscriptionSegment, DetailedTranscription } from "@/types";
 import { createSegmentsFromText } from "@/utils";
 import { formatTime, formatCompletionTime } from "@/utils/time-utils";
+import { EnhancedQueuedAudioItem } from "@/store/batchQueueStore";
+
+// Type for the stored part results
+export type StoredPartResult = {
+  text: string;
+  processingTime: number;
+  segments?: TranscriptionSegment[];
+  duration: number;
+};
 
 /**
- * Interface for split audio state
+ * Interface for split audio state, adding store update callback
  */
 export interface SplitAudioState {
+  itemId: string; // ID of the item being processed
+  updateItemInStore: (id: string, updates: Partial<EnhancedQueuedAudioItem>) => void; // Callback to update store
   setIsTranscribingParts: (isTranscribing: boolean) => void;
   setIsTranscribing: (isTranscribing: boolean) => void;
   setError: (error: string | null) => void;
@@ -15,26 +26,34 @@ export interface SplitAudioState {
   setProcessingTime: (processingTime: string | null) => void;
   setTranscriptionData: (data: DetailedTranscription | null) => void;
   setFormattedTranscriptionText: (text: string) => void;
-  setPartResults: (results: {text: string, processingTime: number}[]) => void;
   setCurrentPartIndex: (index: number) => void;
   setTranscriptionProgress: (progress: number) => void;
   getElapsedTime?: () => number;
 }
 
 /**
- * Process transcription for split audio parts
+ * Type for the resume state passed into the function
+ */
+interface ResumeState {
+  lastCompletedPartIndex: number;
+  partResults: StoredPartResult[];
+}
+
+/**
+ * Process transcription for split audio parts, supporting resume
  */
 export async function processSplitAudioParts(
   audioParts: AudioPart[],
   model: string,
   state: SplitAudioState,
+  resumeState?: ResumeState | null, // Optional resume state
   apiEndpoint: string = "/api/transcribe"
 ) {
   if (!audioParts.length) {
     throw new Error("No audio parts provided for transcription");
   }
   
-  // Mark as processing
+  // --- Initialization --- 
   state.setIsTranscribingParts(true);
   state.setIsTranscribing(true);
   state.setError(null);
@@ -42,73 +61,87 @@ export async function processSplitAudioParts(
   state.setProcessingTime(null);
   state.setTranscriptionData(null);
   state.setFormattedTranscriptionText("");
-  state.setPartResults([]);
   
-  // Start timing
+  // Timer setup
   const startTime = Date.now();
-  
-  // If we have a getElapsedTime function, use that instead of our own timer
   const getElapsedSeconds = () => {
-    if (state.getElapsedTime) {
-      return state.getElapsedTime();
-    }
+    if (state.getElapsedTime) return state.getElapsedTime();
     return Math.floor((Date.now() - startTime) / 1000);
   };
-  
-  // Setup an interval to continuously update the elapsed time if we don't have getElapsedTime
   let timerInterval: NodeJS.Timeout | null = null;
   if (!state.getElapsedTime) {
     timerInterval = setInterval(() => {
-      const currentElapsed = Math.floor((Date.now() - startTime) / 1000);
-      state.setElapsedTime(currentElapsed);
+      state.setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
   }
+
+  // --- State Variables (initialized differently if resuming) ---
+  let combinedText = "";
+  let totalProcessingTime = 0;
+  let allSegments: TranscriptionSegment[] = [];
+  let segmentTimeOffset = 0;
+  let startPartIndex = 0;
+  const partResultsArray: StoredPartResult[] = []; // Use the detailed type
+
+  // Apply resume state if provided
+  if (resumeState && resumeState.lastCompletedPartIndex >= 0 && resumeState.partResults) {
+    console.log(`Resuming transcription for item ${state.itemId} from part ${resumeState.lastCompletedPartIndex + 1}`);
+    startPartIndex = resumeState.lastCompletedPartIndex + 1;
+    partResultsArray.push(...resumeState.partResults);
+
+    // Reconstruct state from previous results
+    resumeState.partResults.forEach(result => {
+      combinedText += (combinedText ? "\n" : "") + result.text;
+      totalProcessingTime += result.processingTime;
+      if (result.segments) {
+         // Adjust segments based on accumulated duration
+         const adjustedSegments = result.segments.map(seg => ({
+           ...seg,
+           start: seg.start + segmentTimeOffset,
+           end: seg.end + segmentTimeOffset,
+         }));
+         allSegments.push(...adjustedSegments);
+      }
+      segmentTimeOffset += result.duration;
+    });
+    toast.info(`Resumed processing from part ${startPartIndex + 1}/${audioParts.length}`);
+  } else {
+    console.log(`Starting transcription for item ${state.itemId} from beginning.`);
+  }
   
+  // Initial progress update (consider adjusting based on resume?)
+  state.setTranscriptionProgress(5); 
+
+  // --- Main Processing Loop --- 
   try {
-    let combinedText = "";
-    let totalProcessingTime = 0;
-    const partResultsArray: {text: string, processingTime: number}[] = [];
-    const allSegments: TranscriptionSegment[] = [];
-    let segmentTimeOffset = 0;
-    
-    // Initial progress update
-    state.setTranscriptionProgress(5);
-    
-    // Process each part sequentially
-    for (let i = 0; i < audioParts.length; i++) {
+    for (let i = startPartIndex; i < audioParts.length; i++) {
       state.setCurrentPartIndex(i);
       
-      // Calculate part-based progress: initial 5% + progress through parts (up to 95%)
-      const progressPercent = 5 + Math.round((i / audioParts.length) * 90);
+      // Calculate part-based progress
+      const progressPercent = 5 + Math.round(((i + 1) / audioParts.length) * 90);
       state.setTranscriptionProgress(progressPercent);
       
       const part = audioParts[i];
       const partStartTime = Date.now();
-      
-      // Create a blob to file to send to the API
       const partFile = new File([part.blob], part.name, { type: part.blob.type });
-      
-      // Create a FormData object
       const formData = new FormData();
       formData.append("file", partFile);
       formData.append("model", model);
       
-      console.log(`Starting transcription of part ${i+1}/${audioParts.length} (${part.size} bytes) with model: ${model}`);
+      console.log(`[${state.itemId}] Starting transcription of part ${i+1}/${audioParts.length} (${part.size} bytes) with model: ${model}`);
       
-      // Make a request to our API endpoint
       const response = await fetch(apiEndpoint, {
         method: "POST",
         body: formData,
       });
       
       if (!response.ok) {
-        const errorData = await response.json();
-        console.error(`API error for part ${i+1}:`, errorData);
+        // Handle API errors (keep existing detailed error handling)
+        const errorData = await response.json().catch(() => ({ error: `HTTP error ${response.status}` })); // Graceful JSON parsing
+        console.error(`[${state.itemId}] API error for part ${i+1}:`, errorData);
         const errorMessage = errorData.error || `Failed to transcribe part ${i+1}`;
-        if (errorMessage.includes("Unknown model option")) {
-          throw new Error(`Invalid model: "${model}". Make sure the model name is valid and properly prefixed (e.g., "groq-" for Groq API models).`);
-        }
-        throw new Error(errorMessage);
+        // Throw error to be caught by the outer catch block
+        throw new Error(errorMessage); 
       }
       
       const data = await response.json();
@@ -116,121 +149,144 @@ export async function processSplitAudioParts(
       const partElapsedSeconds = Math.floor((partEndTime - partStartTime) / 1000);
       
       if (data.transcription && data.transcription.text) {
-        // Use the processing time from the API or calculate from elapsed time
-        const partProcessingTime = data.transcription.processingTime || partElapsedSeconds;
+        const transcriptionResult = data.transcription as DetailedTranscription;
+        const partProcessingTime = transcriptionResult.processingTime || partElapsedSeconds;
         
-        // Create part result
-        const partResult = {
-          text: data.transcription.text,
-          processingTime: partProcessingTime
+        // Create part result including segments and duration
+        const partResult: StoredPartResult = {
+          text: transcriptionResult.text,
+          processingTime: partProcessingTime,
+          segments: transcriptionResult.segments || [], // Store segments
+          duration: part.duration // Store duration
         };
         
-        // Add to results array
         partResultsArray.push(partResult);
-        state.setPartResults([...partResultsArray]);
         
-        // Update combined text - use single newline for better formatting
-        if (i > 0) {
-          // Add a single newline separator and the part label
-          // The part label is optional and can be commented out for cleaner output
-          combinedText += "\n" + data.transcription.text;
-          // If you prefer to keep part labels, use this instead:
-          // combinedText += "\n" + `[Part ${i+1}] ` + data.transcription.text;
-        } else {
-          // For the first part, just add the text
-          combinedText += data.transcription.text;
-        }
+        // ++ Update Store with Progress ++ 
+        state.updateItemInStore(state.itemId, {
+          lastCompletedPartIndex: i,
+          partResults: [...partResultsArray] // Save current results
+        });
+        
+        // Update local combined text
+        combinedText += (combinedText ? "\n" : "") + partResult.text;
 
-        // Process segments - adjust timestamps for each part based on its position
-        if (data.transcription.segments && data.transcription.segments.length > 0) {
-          // Adjust segment timestamps to account for position in combined audio
-          const adjustedSegments = data.transcription.segments.map((segment: TranscriptionSegment) => ({
+        // Process and add segments, adjusting for time offset
+        if (partResult.segments && partResult.segments.length > 0) {
+          const adjustedSegments = partResult.segments.map(segment => ({
             ...segment,
             start: segment.start + segmentTimeOffset,
             end: segment.end + segmentTimeOffset
           }));
-          
-          // Add segments to the combined list
           allSegments.push(...adjustedSegments);
         }
         
-        // Update segment time offset for the next part
+        // Update segment time offset *after* processing current part's segments
         segmentTimeOffset += part.duration;
+        totalProcessingTime += partProcessingTime;
         
-        // Update transcription data after each part for progressive display
-        const progressiveTranscription = {
+        // Update UI state for progressive display (optional)
+        const progressiveTranscription: DetailedTranscription = {
           text: combinedText,
-          language: "en",
+          language: transcriptionResult.language || "en",
           segments: allSegments.length > 0 ? allSegments : [], 
-          processingTime: totalProcessingTime + partProcessingTime,
+          processingTime: totalProcessingTime,
           usedGpu: model.includes("medium") || model.includes("large") || model.includes("groq")
         };
-        
         state.setTranscriptionData(progressiveTranscription);
         state.setFormattedTranscriptionText(combinedText);
         
-        totalProcessingTime += partProcessingTime;
-        
-        // Display processing time information for this part
-        const deviceType = model.startsWith('groq') ? 'Groq API' : (data.transcription.usedGpu ? 'GPU' : 'CPU');
-        
+        // Display success toast
+        const deviceType = model.startsWith('groq') ? 'Groq API' : (transcriptionResult.usedGpu ? 'GPU' : 'CPU');
         toast.success(
           `Part ${i+1}/${audioParts.length} complete in ${formatTime(partProcessingTime)} using ${deviceType}`, 
           { duration: 3000 }
         );
-        
-        console.log(`Completed part ${i+1}/${audioParts.length} in ${formatTime(partProcessingTime)}`);
+        console.log(`[${state.itemId}] Completed part ${i+1}/${audioParts.length} in ${formatTime(partProcessingTime)}`);
+      } else {
+        // Handle case where transcription is successful but text is empty
+        console.warn(`[${state.itemId}] Transcription for part ${i+1} returned empty text.`);
+        // Decide if this should be an error or just skipped
+        // For now, let's treat it as success but store an empty result
+        const emptyPartResult: StoredPartResult = {
+          text: "",
+          processingTime: partElapsedSeconds,
+          segments: [],
+          duration: part.duration
+        };
+        partResultsArray.push(emptyPartResult);
+        state.updateItemInStore(state.itemId, {
+          lastCompletedPartIndex: i,
+          partResults: [...partResultsArray]
+        });
+        segmentTimeOffset += part.duration; // Still advance time offset
+        totalProcessingTime += partElapsedSeconds;
       }
       
-      // Update progress
+      // Update overall progress UI
       const completedProgress = 5 + Math.round(((i + 1) / audioParts.length) * 90);
       state.setTranscriptionProgress(completedProgress);
     }
     
-    // Set final progress to 100%
+    // --- Finalization (if loop completes) --- 
     state.setTranscriptionProgress(100);
     
-    // Final update with complete data
     const finalProcessingTime = getElapsedSeconds();
     const finalCombinedTranscription: DetailedTranscription = {
       text: combinedText,
-      language: "en",
+      language: "en", // Assume language from last part or default
       segments: allSegments.length > 0 ? allSegments : createSegmentsFromText(combinedText).segments,
       processingTime: totalProcessingTime > 0 ? totalProcessingTime : finalProcessingTime,
       usedGpu: model.includes("medium") || model.includes("large") || model.includes("groq")
     };
     
+    // Update final UI state
     state.setTranscriptionData(finalCombinedTranscription);
     state.setFormattedTranscriptionText(combinedText);
     
-    // Display final processing time information
-    const deviceType = model.startsWith('groq') ? 'Groq API' : (finalCombinedTranscription.usedGpu ? 'GPU' : 'CPU');
-    
-    // Ensure we use a valid processing time 
-    const actualProcessingTime = 
-      finalCombinedTranscription.processingTime !== undefined && finalCombinedTranscription.processingTime > 0 
-        ? finalCombinedTranscription.processingTime 
-        : finalProcessingTime;
-    
-    const timeMessage = formatCompletionTime(actualProcessingTime, deviceType);
+    // Final toast message
+    const finalDeviceType = model.startsWith('groq') ? 'Groq API' : (finalCombinedTranscription.usedGpu ? 'GPU' : 'CPU');
+    const actualProcessingTime = finalCombinedTranscription.processingTime || finalProcessingTime;
+    const timeMessage = formatCompletionTime(actualProcessingTime, finalDeviceType);
     state.setProcessingTime(timeMessage);
-    toast.success(`All parts transcribed! ${timeMessage}`);
+    toast.success(`All parts transcribed for item ${state.itemId}! ${timeMessage}`);
     
+    // Return the final result
     return finalCombinedTranscription;
+
   } catch (err) {
-    console.error("Transcription error:", err);
-    state.setError(`Error: ${err instanceof Error ? err.message : "Unknown error occurred"}`);
-    return null;
+    // --- Error Handling --- 
+    console.error(`[${state.itemId}] Transcription error during part processing:`, err);
+    // Use existing detailed error message generation
+    let errorMessage = "Unknown error occurred during part processing";
+    if (err instanceof Error) {
+        const errorStr = err.message;
+        if (errorStr.includes("Connection error") || errorStr.includes("Failed to fetch")) {
+            errorMessage = "Network connection error accessing transcription API.";
+        } else if (errorStr.includes("Invalid model") || errorStr.includes("Unknown model option")) {
+            errorMessage = `Invalid model configuration: ${errorStr}`;
+        } else if (errorStr.includes("API Key") || errorStr.includes("authentication")) {
+            errorMessage = "Authentication failed with API. Check configuration.";
+        } else if (model.startsWith('groq-')) {
+            errorMessage = `Groq API error: ${errorStr}`;
+        } else {
+            errorMessage = errorStr;
+        }
+    }
+    // Set error state but *don't* clear partial results from store here
+    state.setError(`Error: ${errorMessage}`); 
+    // Rethrow the error to be caught by the calling function (processAudioItem)
+    throw new Error(errorMessage); 
+
   } finally {
-    // Clear the timer interval
+    // --- Cleanup --- 
     if (timerInterval) {
       clearInterval(timerInterval);
     }
-    
-    // Ensure we always keep the progress at 100% when finished
-    state.setTranscriptionProgress(100);
+    // Ensure UI state reflects completion/stop
+    state.setTranscriptionProgress(100); // Keep at 100 if finished or stopped
     state.setIsTranscribing(false);
     state.setIsTranscribingParts(false);
-    state.setCurrentPartIndex(-1);
+    state.setCurrentPartIndex(-1); // Reset part index display
   }
 } 

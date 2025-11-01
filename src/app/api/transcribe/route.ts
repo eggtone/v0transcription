@@ -2,243 +2,114 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { transcribeAudio, isModelDownloaded, estimateDownloadTime } from '@/services/whisper';
-import { createApiClient } from '@/services/api-client';
-import { DetailedTranscription } from '@/types';
-import { createSegmentsFromText } from '@/utils';
+import { v4 as uuidv4 } from 'uuid'; // For request ID
+import logger from '@/utils/logger'; // Import logger
+import { runTranscription } from '@/services/transcription-service'; // Import the new service
+import { z } from "zod"; // Import Zod
 
-// Set timeouts for the transcription process
-const LOCAL_TIMEOUT_MS = 60 * 60 * 1000; // 30 minutes for local models
-const GROQ_TIMEOUT_MS = 15 * 60 * 1000;  // 10 minutes for Groq models
-
-// The list of models that should be run locally
-const LOCAL_MODELS = (process.env.WHISPER_LOCAL_MODELS || 'tiny,base,small,medium').split(',');
+// Define Zod schema for expected FormData fields
+const TranscribeFileSchema = z.object({
+  file: z.instanceof(File, { message: "Audio file is required" })
+    .refine(file => file.size > 0, "Uploaded file cannot be empty")
+    .refine(file => file.size < 100 * 1024 * 1024, "File size must be less than 100MB"), // Example size limit
+  model: z.string().min(1, "Model option is required"), // Further validation could be added
+});
 
 /**
- * Handles transcription request
+ * Handles file transcription request using the centralized transcription service.
  */
 export async function POST(request: NextRequest) {
-  console.log('Transcription API called');
+  const requestId = uuidv4();
+  const handlerLogger = logger.child({ requestId, route: '/api/transcribe' });
+
+  handlerLogger.info('File transcription request received');
+  
+  // Define temporary directory path
+  const tmpDir = path.join(os.tmpdir(), 'transcriptor-temp'); 
+  let audioFilePath: string | null = null; // Keep track of the path for cleanup
   
   try {
-    // Get form data from the request
-    const formData = await request.formData();
-    const file = formData.get('file') as File | null;
-    const modelOption = formData.get('model') as string || 'whisper-tiny';
-
-    if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-    }
-
-    console.log(`Received transcription request with model: ${modelOption}`);
-    
-    // Convert File to Buffer for processing
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    
-    // Create a temporary directory for processing files
-    const tmpDir = path.join(os.tmpdir(), 'whisper-temp');
+    // Ensure temporary directory exists
     if (!fs.existsSync(tmpDir)) {
+      handlerLogger.debug({ path: tmpDir }, 'Creating temp directory');
       fs.mkdirSync(tmpDir, { recursive: true });
     }
 
-    // Create unique filenames based on timestamp
-    const timestamp = Date.now();
-    const fileExtension = path.extname(file.name);
-    const audioFilePath = path.join(tmpDir, `audio_${timestamp}${fileExtension}`);
+    // Get form data
+    const formData = await request.formData();
+    const file = formData.get('file') as File | null;
+    const modelOption = formData.get('model') as string || 'whisper-tiny'; // Default model
 
-    // Save file to disk (needed for both local and API-based transcription)
-    fs.writeFileSync(audioFilePath, buffer);
-
-    let transcriptionResult: DetailedTranscription;
-    
-    try {
-      // Check if we should use local Whisper or Groq API
-      if (modelOption.startsWith('whisper-')) {
-        transcriptionResult = await handleLocalTranscription(audioFilePath, modelOption, tmpDir);
-      } else if (modelOption.startsWith('groq-')) {
-        transcriptionResult = await handleGroqTranscription(buffer, file.name, modelOption);
-      } else {
-        return NextResponse.json(
-          { error: `Unknown model option: ${modelOption}` },
-          { status: 400 }
-        );
-      }
-      
-      // Clean up temp file if it still exists
-      try {
-        if (fs.existsSync(audioFilePath)) {
-          fs.unlinkSync(audioFilePath);
-        }
-      } catch (err) {
-        console.error('Error cleaning up audio file:', err);
-      }
-      
-      return NextResponse.json({ transcription: transcriptionResult });
-    } catch (error) {
-      // Clean up temp file if it exists
-      try {
-        if (fs.existsSync(audioFilePath)) {
-          fs.unlinkSync(audioFilePath);
-        } 
-      } catch (err) {
-        console.error('Error cleaning up audio file:', err);
-      }
-      
-      throw error; // Rethrow for the outer catch block to handle
+    if (!file) {
+      handlerLogger.warn('No file provided in request');
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
-  } catch (error) {
-    console.error('Error in transcription:', error);
-    
-    // Provide a more specific error message if it's a model download issue
-    const message = (error as Error).message;
-    if (message.includes('No such file or directory') && message.includes('.pt')) {
+
+    // Validate using Zod
+    const validationResult = TranscribeFileSchema.safeParse({
+      file: file instanceof File ? file : undefined, 
+      model: typeof modelOption === 'string' ? modelOption : undefined,
+    });
+
+    if (!validationResult.success) {
+      handlerLogger.warn({ errors: validationResult.error.errors }, 'Invalid transcription request data');
+      const errorMessages = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
       return NextResponse.json(
-        { error: 'Error downloading the Whisper model. Please try again or select a smaller model.' },
-        { status: 500 }
+        { error: `Invalid request data: ${errorMessages}`, details: validationResult.error.flatten() },
+        { status: 400 }
       );
     }
+
+    // Use validated data
+    const validatedFile = validationResult.data.file;
+    const validatedModel = validationResult.data.model;
+
+    handlerLogger.info({ filename: validatedFile.name, size: validatedFile.size, model: validatedModel }, 'Processing validated file transcription request');
     
+    // Convert File to Buffer
+    const arrayBuffer = await validatedFile.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    // Create unique temporary file path
+    const timestamp = Date.now();
+    const fileExtension = path.extname(validatedFile.name);
+    audioFilePath = path.join(tmpDir, `upload_${requestId}_${timestamp}${fileExtension || '.tmp'}`); 
+
+    // Save buffer to temporary file
+    fs.writeFileSync(audioFilePath, buffer);
+    handlerLogger.debug({ path: audioFilePath }, 'Temporary audio file saved');
+
+    // Call the centralized transcription service
+    const transcriptionResult = await runTranscription(
+      audioFilePath,
+      validatedFile.name,
+      validatedModel,
+      tmpDir
+    );
+    
+    handlerLogger.info({ filename: validatedFile.name, model: validatedModel }, 'Transcription successful');
+
+    // Return the result
+    return NextResponse.json({ transcription: transcriptionResult });
+
+  } catch (error) {
+    handlerLogger.error({ err: error }, 'Error during file transcription request');
     return NextResponse.json(
-      { error: `Transcription failed: ${(error as Error).message}` },
+      { error: `Transcription failed: ${(error instanceof Error ? error.message : String(error))}` }, 
       { status: 500 }
     );
-  }
-}
-
-/**
- * Handle local transcription with Whisper
- */
-async function handleLocalTranscription(
-  audioFilePath: string, 
-  modelOption: string,
-  tmpDir: string
-): Promise<DetailedTranscription> {
-  // Extract the base model name and whether to use GPU
-  const isGpuModel = modelOption.endsWith('-gpu');
-  const baseModelOption = isGpuModel ? modelOption.replace('-gpu', '') : modelOption;
-  
-  // Map the model name from our UI to the correct whisper model parameter
-  const whisperModelMap: Record<string, string> = {
-    'whisper-tiny': 'tiny',
-    'whisper-base': 'base',
-    'whisper-small': 'small',
-    'whisper-medium': 'medium',
-  };
-
-  const model = whisperModelMap[baseModelOption] || 'tiny';
-  
-  // Check if model is downloaded, if not, inform the user about expected download
-  const isDownloaded = await isModelDownloaded(model);
-  
-  if (!isDownloaded) {
-    const downloadTime = estimateDownloadTime(model);
-    console.log(`Model ${model} is not downloaded yet. It will be downloaded automatically (may take ${downloadTime}).`);
-  }
-  
-  // Set a timeout for the transcription process
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      reject(new Error(`Transcription timed out after ${LOCAL_TIMEOUT_MS / 60000} minutes`));
-    }, LOCAL_TIMEOUT_MS);
-  });
-  
-  // Start the transcription with the appropriate device setting
-  const transcriptionPromise = transcribeAudio(
-    audioFilePath, 
-    model, 
-    tmpDir, 
-    isGpuModel // Pass whether to use GPU
-  );
-  
-  // Race between transcription and timeout
-  const result = await Promise.race([
-    transcriptionPromise,
-    timeoutPromise
-  ]);
-  
-  // Create detailed transcription
-  let detailedTranscription: DetailedTranscription;
-  
-  // If we have segments from Whisper JSON output, use them
-  if (result.segments && result.segments.length > 0) {
-    console.log(`Using ${result.segments.length} segments from Whisper JSON output`);
-    detailedTranscription = {
-      text: result.transcription,
-      segments: result.segments,
-      language: 'en'
-    };
-  } else {
-    // Fallback to creating segments from raw text
-    console.log('No segments in Whisper output, creating from text');
-    detailedTranscription = createSegmentsFromText(result.transcription);
-  }
-  
-  // Add processing time information if available
-  if (result.processingTime) {
-    detailedTranscription.processingTime = result.processingTime;
-    detailedTranscription.usedGpu = isGpuModel && !result.usedFallback;
-  }
-  
-  // Clean up output file if it exists
-  try {
-    if (fs.existsSync(result.outputPath)) {
-      fs.unlinkSync(result.outputPath);
-    }
-  } catch (err) {
-    console.error('Error cleaning up output file:', err);
-  }
-  
-  return detailedTranscription;
-}
-
-/**
- * Handle Groq API transcription
- */
-async function handleGroqTranscription(
-  buffer: Buffer, 
-  filename: string,
-  modelOption: string
-): Promise<DetailedTranscription> {
-  console.log(`Using Groq API for transcription with model: ${modelOption}`);
-  
-  try {
-    const apiClient = createApiClient(modelOption);
-    
-    // Set a timeout for the Groq API transcription
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error(`Groq API transcription timed out after ${GROQ_TIMEOUT_MS / 60000} minutes`));
-      }, GROQ_TIMEOUT_MS);
-    });
-    
-    // Race between transcription and timeout
-    const result = await Promise.race([
-      apiClient.transcribeAudio(buffer, filename),
-      timeoutPromise
-    ]);
-    
-    return result;
-  } catch (error) {
-    console.error('Error using Groq API:', error);
-    
-    // Provide more specific error details if available
-    let errorMessage = 'Groq API transcription failed';
-    
-    if (error instanceof Error) {
-      errorMessage = error.message;
-      console.log('Error details:', error);
-      
-      // Check for specific error patterns
-      if (error.message.includes('404') && error.message.includes('does not exist')) {
-        errorMessage = 'The specified Whisper model is not available in Groq. Please try another model.';
-      } else if (error.message.includes('401') || error.message.includes('403')) {
-        errorMessage = 'Authentication failed with Groq API. Please check your API key.';
-      } else if (error.message.includes('429')) {
-        errorMessage = 'Rate limit exceeded with Groq API. Please try again later.';
+  } finally {
+    // Cleanup: Ensure the temporary audio file is deleted
+    if (audioFilePath && fs.existsSync(audioFilePath)) {
+      try {
+        fs.unlinkSync(audioFilePath);
+        handlerLogger.debug({ path: audioFilePath }, 'Cleaned up temporary audio file');
+      } catch (cleanupError) {
+        handlerLogger.warn({ path: audioFilePath, err: cleanupError }, 'Error cleaning up temporary audio file');
       }
     }
-    
-    throw new Error(errorMessage);
   }
-} 
+}
+
+// Removed the old handleLocalTranscription and handleGroqTranscription functions
+// as their logic is now in transcription-service.ts 

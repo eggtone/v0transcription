@@ -50,4 +50,43 @@ export interface WhisperTranscriptionResult {
   outputPath: string;
   processingTime?: number;  // Time taken to process in seconds
   usedFallback?: boolean;   // Whether CPU fallback was used
+}
+
+/**
+ * Represents an item in the batch processing queue.
+ * This is the base type used for adding items.
+ */
+export interface QueuedAudioItem {
+  id: string;
+  name: string;
+  source: 'local' | 'youtube-video' | 'youtube-playlist';
+  file: File | null; // Local file blob or downloaded YT audio
+  url: string | null;  // Original YT URL or blob URL for local files
+  
+  // Extraction/Download related (mostly for YT)
+  extractionProgress?: number;
+  extractionTime?: number;
+  downloadProgress?: number;
+  downloadTime?: number;
+  extractionStatus?: 'pending' | 'extracting' | 'downloading' | 'completed' | 'failed';
+  
+  duration?: number; // Estimated or actual duration
+  order: number;     // Display order in the queue
+
+  // Transcription status (added later by store/processing logic)
+  // transcriptionStatus?: 'pending' | 'processing' | 'completed' | 'failed';
+  // transcriptionData?: DetailedTranscription | null;
+  // transcriptionError?: string;
+  // transcriptionTime?: number;
+
+  // Metadata
+  metadata?: {
+    youtubeInfo?: any; // Store result from /api/youtube/extract
+    tempFileName?: string; // Name of the file saved in the OS temp dir by extract API
+    playlistInfo?: { 
+      position: number;
+      totalItems: number;
+      playlistId: string;
+    };
+  };
 } 

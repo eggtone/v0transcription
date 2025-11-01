@@ -2,119 +2,141 @@ import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import { v4 as uuidv4 } from 'uuid'; // For request ID
+import logger from '@/utils/logger'; // Import logger
 import { isValidYouTubeUrl } from '@/services/youtube';
 import { MP3Quality, DEFAULT_MP3_QUALITY } from '@/utils/audio-utils';
+import { z } from "zod"; // Import Zod
 
-// Directory where extracted audio files will be stored temporarily
-const TEMP_DIR = path.join(process.cwd(), "tmp");
+// Define Zod schema for the request body
+const ExtractRequestSchema = z.object({
+  url: z.string().url("Invalid URL format").refine(isValidYouTubeUrl, "URL must be a valid YouTube video URL"),
+  quality: z.nativeEnum(MP3Quality).optional(), // Use the MP3Quality enum
+});
 
-// Ensure the temp directory exists
+// Standardized temporary directory within the OS temp folder
+const TEMP_DIR = path.join(os.tmpdir(), "transcriptor-temp");
+
+// Ensure the standardized temp directory exists
 if (!fs.existsSync(TEMP_DIR)) {
-  fs.mkdirSync(TEMP_DIR, { recursive: true });
+  try {
+    logger.debug({ path: TEMP_DIR }, '[YT Extract] Creating temp directory');
+    fs.mkdirSync(TEMP_DIR, { recursive: true });
+  } catch (err) {
+     if (!fs.existsSync(TEMP_DIR)) {
+       logger.error({ path: TEMP_DIR, error: err }, '[YT Extract] Failed to create temp directory');
+       throw err; // Rethrow if failed
+     }
+     logger.warn({ path: TEMP_DIR }, '[YT Extract] Temp directory already existed despite check');
+  }
 }
 
 // A server-side wrapper class for yt-dlp operations
 class YTDlpWrap {
   private ytdlpPath: string;
+  private logger: typeof logger;
   
-  constructor() {
-    // Use system yt-dlp if available
-    this.ytdlpPath = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+  constructor(parentLogger: typeof logger) {
+    this.logger = parentLogger.child({ service: 'YTDlpWrap' });
+    // Read path from environment variable or use default
+    const defaultPath = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+    this.ytdlpPath = process.env.YT_DLP_EXECUTABLE_PATH || defaultPath;
+    this.logger.info({ path: this.ytdlpPath }, 'Using yt-dlp executable path');
   }
   
-  /**
-   * Execute a yt-dlp command with the given arguments
-   */
   exec(args: string[], options: { onData?: (data: string) => void; onError?: (data: string) => void } = {}): Promise<string> {
+    this.logger.debug({ args }, 'Executing yt-dlp command');
     return new Promise((resolve, reject) => {
       const childProcess = spawn(this.ytdlpPath, args);
-      
       let stdoutChunks: Buffer[] = [];
       let stderrChunks: Buffer[] = [];
       
       childProcess.stdout.on('data', (data: Buffer) => {
         stdoutChunks.push(data);
-        if (options.onData) {
-          options.onData(data.toString());
-        }
+        // Avoid logging potentially large stdout data by default
+        if (options.onData) options.onData(data.toString());
       });
       
       childProcess.stderr.on('data', (data: Buffer) => {
         stderrChunks.push(data);
-        if (options.onError) {
-          options.onError(data.toString());
-        }
+        const stderrStr = data.toString();
+        this.logger.trace({ stderr: stderrStr }, 'yt-dlp stderr data'); // Log stderr at trace level
+        if (options.onError) options.onError(stderrStr);
       });
       
       childProcess.on('close', (code) => {
+        const stdout = Buffer.concat(stdoutChunks).toString();
+        const stderr = Buffer.concat(stderrChunks).toString();
         if (code === 0 || stdoutChunks.length > 0) {
-          // Consider it a success if we got any output, even with non-zero exit code
-          const stdout = Buffer.concat(stdoutChunks).toString();
+          this.logger.debug({ code, stdoutLength: stdout.length, stderrLength: stderr.length }, 'yt-dlp process finished successfully (or with output)');
           resolve(stdout);
         } else {
-          const stderr = Buffer.concat(stderrChunks).toString();
+          this.logger.error({ code, stderr }, 'yt-dlp process exited with error');
           reject(new Error(`yt-dlp process exited with code ${code}: ${stderr}`));
         }
       });
       
       childProcess.on('error', (err) => {
+        this.logger.error({ error: err }, 'Failed to start yt-dlp process');
         reject(new Error(`Failed to start yt-dlp process: ${err.message}`));
       });
     });
   }
   
-  /**
-   * Promisified version of the exec method
-   */
   execPromise(args: string[]): Promise<string> {
     return this.exec(args);
   }
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = uuidv4();
+  const handlerLogger = logger.child({ requestId, route: '/api/youtube/extract' });
+
+  handlerLogger.info('YouTube extraction request received');
   let warnings: string[] = [];
+  let outputFilePath: string | null = null; // Track for cleanup
   
   try {
     const body = await request.json();
-    const { url, quality } = body;
-
-    if (!url) {
-      return NextResponse.json({ error: "URL is required" }, { status: 400 });
+    
+    // Validate request body using Zod
+    const validationResult = ExtractRequestSchema.safeParse(body);
+    if (!validationResult.success) {
+      handlerLogger.warn({ errors: validationResult.error.errors }, 'Invalid YouTube extraction request body');
+      return NextResponse.json(
+        { error: "Invalid request body", details: validationResult.error.flatten() },
+        { status: 400 }
+      );
     }
 
-    // Check if URL is a valid YouTube URL
-    if (!isValidYouTubeUrl(url)) {
-      return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
-    }
+    // Use validated data
+    const { url, quality } = validationResult.data;
+    handlerLogger.debug({ url, quality }, 'Validated request body');
 
-    // Use provided quality or default
     const audioQuality = quality !== undefined ? quality : DEFAULT_MP3_QUALITY;
+    const uniqueId = `yt_extract_${requestId}_${Date.now()}`;
+    const outputFileName = `${uniqueId}.mp3`;
+    outputFilePath = path.join(TEMP_DIR, outputFileName);
 
-    // Generate a unique file name based on timestamp and random string
-    const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
-    const outputFilePath = path.join(TEMP_DIR, `${uniqueId}.mp3`);
-
-    // Create YTDlpWrap instance
-    const ytdlp = new YTDlpWrap();
+    // Pass logger to YTDlpWrap instance
+    const ytdlp = new YTDlpWrap(handlerLogger);
 
     // Get video info
     let videoInfo;
+    handlerLogger.info({ url }, 'Fetching video info');
     try {
       const videoInfoRaw = await ytdlp.exec([
         url,
         '--dump-json',
         '--no-playlist',
       ], {
-        onError: (msg) => {
-          if (msg.trim()) {
-            warnings.push(msg.trim());
-          }
-        }
+        onError: (msg) => { if (msg.trim()) warnings.push(msg.trim()); }
       });
-
       videoInfo = JSON.parse(videoInfoRaw);
+      handlerLogger.debug({ videoId: videoInfo?.id, title: videoInfo?.title }, 'Video info fetched');
     } catch (error) {
-      console.error("Error getting video info:", error);
+      handlerLogger.error({ url, error }, "Error getting video info");
       return NextResponse.json({ 
         error: "The video is unavailable or has been removed from YouTube",
         details: error instanceof Error ? error.message : "Unknown error",
@@ -127,25 +149,19 @@ export async function POST(request: NextRequest) {
     const thumbnailUrl = videoInfo.thumbnail || '';
 
     // Download and extract audio
+    handlerLogger.info({ url, quality: audioQuality, path: outputFilePath }, 'Extracting audio');
     try {
       await ytdlp.exec([
         url,
-        '-x',
-        '--audio-format', 'mp3',
-        '--audio-quality', audioQuality.toString(), // Use the specified quality
+        '-x', '--audio-format', 'mp3', '--audio-quality', audioQuality.toString(),
         '-o', outputFilePath,
-        '--no-playlist',
-        '--no-part', // Don't use .part files
-        '--force-overwrites', // Overwrite if exists
+        '--no-playlist', '--no-part', '--force-overwrites',
       ], {
-        onError: (msg) => {
-          if (msg.trim()) {
-            warnings.push(msg.trim());
-          }
-        }
+        onError: (msg) => { if (msg.trim()) warnings.push(msg.trim()); }
       });
     } catch (error) {
-      console.error("Error extracting audio:", error);
+      handlerLogger.error({ url, path: outputFilePath, error }, "Error extracting audio");
+      // Attempt cleanup handled in finally block
       return NextResponse.json({ 
         error: "Failed to extract audio from the video", 
         details: error instanceof Error ? error.message : "Unknown error",
@@ -153,37 +169,44 @@ export async function POST(request: NextRequest) {
       }, { status: 500 });
     }
 
-    // Check if file exists
     if (!fs.existsSync(outputFilePath)) {
-      throw new Error(`Failed to extract audio: Output file not found`);
+       handlerLogger.error({ path: outputFilePath }, 'Output file not found after yt-dlp finished');
+      throw new Error(`Failed to extract audio: Output file not found at ${outputFilePath}`);
     }
 
-    // Get file size
     const stats = fs.statSync(outputFilePath);
     const fileSize = stats.size;
+    const audioUrl = `/api/youtube/audio?file=${outputFileName}`; 
 
-    // Create a relative URL path for the extracted audio
-    // Use the filename route to serve the audio file
-    const audioUrl = `/api/youtube/audio?file=${uniqueId}.mp3`;
+    handlerLogger.info({ path: outputFilePath, size: fileSize, audioUrl }, 'Audio extracted successfully');
 
     return NextResponse.json({
-      title: videoTitle,
-      audioUrl,
-      thumbnailUrl,
-      duration: videoDuration,
-      fileSize,
-      quality: audioQuality, // Include the quality in the response
+      title: videoTitle, audioUrl, thumbnailUrl, duration: videoDuration,
+      fileSize, quality: audioQuality, tempFileName: outputFileName,
       warnings: warnings.length > 0 ? warnings : undefined
     });
+
   } catch (error) {
-    console.error("Error extracting YouTube audio:", error);
+    handlerLogger.error({ err: error }, "Error processing YouTube extraction request");
     return NextResponse.json(
       { 
         error: `Failed to extract YouTube audio: ${error instanceof Error ? error.message : "Unknown error"}`,
-        warnings
+        warnings // Include warnings collected so far even on top-level error
       },
       { status: 500 }
     );
+  } finally {
+       // Attempt to clean up the output file if it exists, regardless of success/failure
+       // Commented out immediate cleanup to allow audio endpoint to fetch the file
+       // TODO: Implement a proper cleanup mechanism (e.g., background job, TTL)
+       // if (outputFilePath && fs.existsSync(outputFilePath)) {
+       //     try {
+       //         fs.unlinkSync(outputFilePath);
+       //         handlerLogger.debug({ path: outputFilePath }, 'Cleaned up temporary extracted file');
+       //     } catch (cleanupError) {
+       //         handlerLogger.warn({ path: outputFilePath, error: cleanupError }, 'Failed to clean up temporary extracted file');
+       //     }
+       // }
   }
 }
 

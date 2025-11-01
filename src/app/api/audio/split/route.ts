@@ -5,8 +5,26 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import logger from '@/utils/logger'; // Import logger
+import { z } from "zod"; // Import Zod
 
 const execPromise = promisify(exec);
+
+// Standardized base temporary directory
+const BASE_TEMP_DIR = path.join(os.tmpdir(), "transcriptor-temp");
+
+/**
+ * Quality settings (numeric values used by ffmpeg -q:a)
+ */
+const MP3QualitySchema = z.coerce.number().int().min(0).max(9); // FFmpeg -q:a range is 0-9
+// Define Zod schema for FormData fields
+const SplitAudioSchema = z.object({
+  file: z.instanceof(File, { message: "Audio file is required" })
+    .refine(file => file.size > 0, "Uploaded file cannot be empty")
+    .refine(file => file.size < 500 * 1024 * 1024, "File size must be less than 500MB"), // Increased limit for splitting
+  numParts: z.coerce.number().int().min(2, "Must split into at least 2 parts").max(50, "Cannot split into more than 50 parts"), // Added min/max
+  quality: MP3QualitySchema.optional(),
+});
 
 /**
  * Quality settings for MP3 Variable Bitrate (VBR)
@@ -23,120 +41,145 @@ enum MP3Quality {
  * Handle audio splitting using FFmpeg
  */
 export async function POST(request: NextRequest) {
-  console.log('Audio split API called');
+  const requestId = uuidv4(); 
+  const handlerLogger = logger.child({ requestId, route: '/api/audio/split' });
+
+  handlerLogger.info('Audio split request received');
+
+  const sessionTmpDir = path.join(BASE_TEMP_DIR, `split_${requestId}`);
+  let inputFilePath: string | null = null;
+  const outputPaths: string[] = [];
 
   try {
-    // Create a unique session ID for this splitting operation
-    const sessionId = uuidv4();
-    
-    // Get form data
-    const formData = await request.formData();
-    const file = formData.get('file') as File | null;
-    const numPartsStr = formData.get('numParts') as string;
-    const qualityStr = formData.get('quality') as string;
-    
-    if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    // --- Add ffprobe check --- 
+    try {
+      handlerLogger.debug('Checking ffprobe accessibility...');
+      await execPromise('ffprobe -version'); 
+      handlerLogger.info('ffprobe check successful.');
+    } catch (ffprobeError) {
+      handlerLogger.error({ err: ffprobeError }, 'ffprobe command failed. Check installation and PATH.');
+      return NextResponse.json(
+        { error: "Server configuration error: ffprobe is not accessible." },
+        { status: 500 }
+      );
+    }
+    // --- End ffprobe check ---
+
+    if (!fs.existsSync(BASE_TEMP_DIR)) {
+      handlerLogger.debug({ path: BASE_TEMP_DIR }, 'Creating base temp directory');
+      fs.mkdirSync(BASE_TEMP_DIR, { recursive: true });
+    }
+    // Ensure session temp directory exists
+    if (!fs.existsSync(sessionTmpDir)) {
+      fs.mkdirSync(sessionTmpDir, { recursive: true });
+      handlerLogger.debug({ path: sessionTmpDir }, 'Created session temp directory');
+    } else {
+       handlerLogger.warn({ path: sessionTmpDir }, 'Session temp directory already existed?');
     }
     
-    // Parse parameters
-    const numParts = parseInt(numPartsStr) || 3;
-    const quality = parseInt(qualityStr) || MP3Quality.LOW;
+    const formData = await request.formData();
     
-    console.log(`Received audio split request: ${file.name}, ${numParts} parts, quality: ${quality}`);
+    // Extract data for validation
+    const fileValue = formData.get('file');
+    const numPartsValue = formData.get('numParts');
+    const qualityValue = formData.get('quality');
+
+    // Validate using Zod
+    const validationResult = SplitAudioSchema.safeParse({
+      file: fileValue instanceof File ? fileValue : undefined,
+      numParts: numPartsValue, // Zod coerces to number
+      quality: qualityValue,   // Zod coerces to number
+    });
+
+    if (!validationResult.success) {
+      handlerLogger.warn({ errors: validationResult.error.errors }, 'Invalid audio split request data');
+      const errorMessages = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+      return NextResponse.json(
+        { error: `Invalid request data: ${errorMessages}`, details: validationResult.error.flatten() },
+        { status: 400 }
+      );
+    }
+
+    // Use validated data
+    const { file, numParts } = validationResult.data;
+    // Use default quality if not provided or invalid
+    const quality = validationResult.data.quality ?? 5; // Default to quality 5 (LOW)
+
+    handlerLogger.info({ filename: file.name, size: file.size, parts: numParts, quality }, 'Processing validated audio split request');
     
-    // Convert File to Buffer for processing
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     
-    // Create a temporary directory for processing files
-    const tmpDir = path.join(os.tmpdir(), `audio-split-${sessionId}`);
-    if (!fs.existsSync(tmpDir)) {
-      fs.mkdirSync(tmpDir, { recursive: true });
-    }
-    
-    // Save the input file
-    const fileNameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
-    const inputFilePath = path.join(tmpDir, file.name);
+    const safeInputFilename = file.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    inputFilePath = path.join(sessionTmpDir, safeInputFilename);
     fs.writeFileSync(inputFilePath, buffer);
+    handlerLogger.debug({ path: inputFilePath }, 'Input file saved');
     
-    // Get the file duration using FFmpeg
-    console.log("Getting audio duration...");
-    const { stdout: durationOutput } = await execPromise(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputFilePath}"`
-    );
-    
-    const totalDuration = parseFloat(durationOutput.trim());
-    console.log(`Audio duration: ${totalDuration}s`);
-    
-    if (isNaN(totalDuration) || totalDuration <= 0) {
-      return NextResponse.json({ error: "Could not determine audio duration" }, { status: 400 });
+    const inputPathQuoted = `"${inputFilePath}"`; 
+    handlerLogger.debug('Getting audio duration via ffprobe');
+    let totalDuration: number;
+    try {
+      const { stdout: durationOutput, stderr: ffprobeStderr } = await execPromise(
+        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 ${inputPathQuoted}`
+      );
+      if (ffprobeStderr) handlerLogger.warn({ stderr: ffprobeStderr }, 'ffprobe (duration) generated stderr output');
+      totalDuration = parseFloat(durationOutput.trim());
+      handlerLogger.debug({ duration: totalDuration }, 'Audio duration determined');
+      if (isNaN(totalDuration) || totalDuration <= 0) {
+        throw new Error("Could not determine valid audio duration");
+      }
+    } catch (durationError) {
+      handlerLogger.error({ err: durationError, path: inputFilePath }, 'Error getting duration');
+      throw new Error(`Failed to get audio duration: ${durationError instanceof Error ? durationError.message : String(durationError)}`);
     }
     
-    // Calculate the duration of each part
     const partDuration = totalDuration / numParts;
-    
-    // Array to store part metadata
     const parts = [];
     
-    // Process each part
     for (let i = 0; i < numParts; i++) {
-      console.log(`Processing part ${i+1}/${numParts}`);
+      const currentPartNum = i + 1;
+      handlerLogger.debug({ part: currentPartNum, total: numParts }, `Processing part`);
       
-      // Calculate the start and end time for this part
       const startTime = i * partDuration;
-      const endTime = Math.min((i + 1) * partDuration, totalDuration);
-      const segmentDuration = endTime - startTime;
+      const segmentDuration = (i === numParts - 1) ? (totalDuration - startTime) : partDuration;
       
-      // Create output file path
-      const outputFileName = `${fileNameWithoutExt}_part${i + 1}.mp3`;
-      const outputFilePath = path.join(tmpDir, outputFileName);
+      const outputFileName = `${path.parse(safeInputFilename).name}_part${currentPartNum}.mp3`;
+      const outputFilePath = path.join(sessionTmpDir, outputFileName);
+      outputPaths.push(outputFilePath);
+      const outputPathQuoted = `"${outputFilePath}"`;
       
-      // Build the FFmpeg command
-      const ffmpegCmd = `ffmpeg -y -i "${inputFilePath}" -ss ${startTime} -t ${segmentDuration} -c:a libmp3lame -q:a ${quality} "${outputFilePath}"`;
+      const ffmpegCmd = `ffmpeg -y -i ${inputPathQuoted} -ss ${startTime} -t ${segmentDuration} -c:a libmp3lame -q:a ${quality} ${outputPathQuoted}`;
       
-      // Execute FFmpeg
-      console.log(`Running FFmpeg command for part ${i+1}`);
-      await execPromise(ffmpegCmd);
-      
-      // Get the output file stats
+      try {
+        handlerLogger.debug({ part: currentPartNum, command: ffmpegCmd }, `Running FFmpeg command`);
+        const { stderr: ffmpegStderr } = await execPromise(ffmpegCmd);
+        if (ffmpegStderr) handlerLogger.warn({ part: currentPartNum, stderr: ffmpegStderr }, 'FFmpeg command generated stderr output');
+      } catch (ffmpegError) {
+        handlerLogger.error({ part: currentPartNum, command: ffmpegCmd, err: ffmpegError }, 'Error running FFmpeg command');
+        throw new Error(`FFmpeg execution failed for part ${currentPartNum}: ${ffmpegError instanceof Error ? ffmpegError.message : String(ffmpegError)}`);
+      }
+
+      if (!fs.existsSync(outputFilePath)) {
+        handlerLogger.error({ path: outputFilePath, part: currentPartNum }, 'FFmpeg failed to create output file');
+        throw new Error(`FFmpeg failed to create output file for part ${currentPartNum}`);
+      }
       const stats = fs.statSync(outputFilePath);
       const fileSize = stats.size;
       
-      // Read the file into a buffer
       const fileData = fs.readFileSync(outputFilePath);
       const base64Data = fileData.toString('base64');
       
-      // Add part metadata to array
       parts.push({
         name: outputFileName,
         size: fileSize,
         duration: segmentDuration,
-        data: base64Data // Base64 encode the file data
+        data: base64Data
       });
-      
-      console.log(`Part ${i+1} created: ${outputFileName} (${fileSize} bytes)`);
+      handlerLogger.debug({ part: currentPartNum }, `Part created successfully`);
     }
     
-    // Calculate total size
     const totalSize = parts.reduce((sum, part) => sum + part.size, 0);
-    console.log(`All parts completed. Total size: ${totalSize} bytes`);
-    
-    // Clean up temporary files
-    try {
-      fs.unlinkSync(inputFilePath);
-      parts.forEach((part) => {
-        const filePath = path.join(tmpDir, part.name);
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
-      });
-      fs.rmdirSync(tmpDir);
-      console.log("Temporary files cleaned up");
-    } catch (cleanupError) {
-      console.error("Error cleaning up temporary files:", cleanupError);
-    }
-    
+    handlerLogger.info({ parts: parts.length, totalSize }, `All parts completed successfully`);
     return NextResponse.json({ 
       success: true, 
       parts: parts,
@@ -144,10 +187,30 @@ export async function POST(request: NextRequest) {
     });
     
   } catch (error) {
-    console.error('Error in audio split:', error);
+    handlerLogger.error({ err: error }, 'Error during audio split request');
     return NextResponse.json(
-      { error: `Failed to split audio: ${(error as Error).message}` },
+      { error: `Failed to split audio: ${error instanceof Error ? error.message : "Unknown error"}` },
       { status: 500 }
     );
+  } finally {
+     handlerLogger.debug({ path: sessionTmpDir }, `Cleaning up session directory`);
+     try {
+      if (inputFilePath && fs.existsSync(inputFilePath)) {
+        fs.unlinkSync(inputFilePath);
+      }
+      outputPaths.forEach((filePath) => {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      });
+      if (fs.existsSync(sessionTmpDir)) {
+         fs.rmdirSync(sessionTmpDir);
+         handlerLogger.debug("Temporary session directory cleaned up");
+      } else {
+         handlerLogger.warn("Temporary session directory already removed or not created.");
+      }
+    } catch (cleanupError) {
+      handlerLogger.warn({ path: sessionTmpDir, err: cleanupError }, 'Error cleaning up temporary files');
+    }
   }
 } 
