@@ -1,12 +1,12 @@
 import OpenAI from 'openai';
-import { ApiClient, DetailedTranscription, TranscriptionSegment } from '@/types';
-import { createSegmentsFromText } from '@/utils';
-import { AudioPart } from '@/utils/audio-utils';
+import { ApiClient, DetailedTranscription, TranscriptionSegment } from '@shared/types';
+import { createSegmentsFromText } from '@server/lib/utils';
+import { AudioPart } from '@server/lib/audio-utils';
 // Import Node.js modules used in GroqClient server-side logic
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import logger from '@/utils/logger'; // Import logger
+import logger from '@server/lib/logger'; // Import logger
 
 // Standardized base temporary directory
 const BASE_TEMP_DIR = path.join(os.tmpdir(), "transcriptor-temp");

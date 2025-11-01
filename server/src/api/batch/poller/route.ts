@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import logger from '@/utils/logger';
+import logger from '@server/lib/logger';
 import { BatchPoller } from '@/services/batch-poller';
 
 // GET - Get poller status

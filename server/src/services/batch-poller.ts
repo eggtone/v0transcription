@@ -1,6 +1,6 @@
-import logger from '@/utils/logger';
+import logger from '@server/lib/logger';
 import GroqBatchService from './groq-batch-service';
-import { batchJobQueries } from '@/lib/database';
+import { batchJobQueries } from '@server/database';
 import NotificationService, { BatchNotification } from './notification-service';
 
 export class BatchPoller {

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import logger from '@/utils/logger';
+import logger from '@server/lib/logger';
 
 const DB_PATH = path.join(process.cwd(), 'data', 'transcriptor.db');
 

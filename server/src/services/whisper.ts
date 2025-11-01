@@ -3,8 +3,8 @@ import { promisify } from 'util';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import logger from '@/utils/logger';
-import { WhisperTranscriptionResult } from '@/types';
+import logger from '@server/lib/logger';
+import { WhisperTranscriptionResult } from '@shared/types';
 
 const execPromise = promisify(exec);
 

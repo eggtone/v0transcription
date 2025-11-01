@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { NotificationService, BatchNotification } from '@/services/notification-service';
-import logger from '@/utils/logger';
+import { NotificationService, BatchNotification } from '@server/services/notification-service';
+import logger from '@server/lib/logger';
 import { z } from 'zod';
 
 // Validation schema for notification request

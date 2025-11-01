@@ -3,7 +3,7 @@
 import React from 'react';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { MP3Quality, MP3QualityLabels, MP3QualityDescriptions, DEFAULT_MP3_QUALITY } from '@/utils/audio-utils';
+import { MP3Quality, MP3QualityLabels, MP3QualityDescriptions, DEFAULT_MP3_QUALITY } from '@/lib/audio-utils';
 import { HelpCircle } from 'lucide-react';
 
 interface AudioQualitySelectorProps {

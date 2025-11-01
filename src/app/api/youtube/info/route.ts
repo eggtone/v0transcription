@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn } from 'child_process';
 import path from 'path';
-import logger from '@/utils/logger';
+import logger from '@server/lib/logger';
 import fs from 'fs';
 
 // Create a child logger for the YouTube info module

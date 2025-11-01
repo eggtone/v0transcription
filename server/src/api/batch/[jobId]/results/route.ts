@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import logger from '@/utils/logger';
+import logger from '@server/lib/logger';
 import GroqBatchService from '@/services/groq-batch-service';
 import JSZip from 'jszip';
 

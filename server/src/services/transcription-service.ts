@@ -8,15 +8,15 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { DetailedTranscription } from '@/types';
-import { createSegmentsFromText } from '@/utils';
-import logger from '@/utils/logger'; // Import the logger
+import { DetailedTranscription } from '@shared/types';
+import { createSegmentsFromText } from '@server/lib/utils';
+import logger from '@server/lib/logger'; // Import the logger
 import { 
   transcribeAudio as transcribeWithWhisper, 
   isModelDownloaded, 
   estimateDownloadTime 
-} from '@/services/whisper';
-import { createApiClient } from '@/services/api-client';
+} from '@server/services/whisper';
+import { createApiClient } from '@server/services/api-client';
 
 // Centralized configuration (Consider moving to src/config.ts later)
 const LOCAL_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes for local models

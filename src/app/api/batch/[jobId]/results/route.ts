@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import logger from '@/utils/logger';
-import GroqBatchService from '@/services/groq-batch-service';
+import logger from '@server/lib/logger';
+import GroqBatchService from '@server/services/groq-batch-service';
 import JSZip from 'jszip';
 
 export async function GET(

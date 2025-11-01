@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import logger from '@/utils/logger'; // Import logger
+import logger from '@server/lib/logger'; // Import logger
 import { z } from "zod"; // Import Zod
 
 const execPromise = promisify(exec);

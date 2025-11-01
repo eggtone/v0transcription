@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os'; // Import os module
 import { headers } from 'next/headers';
 import { v4 as uuidv4 } from 'uuid'; // For request ID
-import logger from '@/utils/logger'; // Import logger
+import logger from '@server/lib/logger'; // Import logger
 
 // Standardized temporary directory within the OS temp folder
 const TEMP_DIR = path.join(os.tmpdir(), "transcriptor-temp");

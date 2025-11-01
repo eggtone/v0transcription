@@ -1,9 +1,9 @@
 import { AudioPart } from "./audio-utils";
 import { toast } from "sonner";
 import { TranscriptionSegment, DetailedTranscription } from "@shared/types";
-import { createSegmentsFromText } from "@server/lib/utils";
-import { formatTime, formatCompletionTime } from "@server/lib/time-utils";
-import { EnhancedQueuedAudioItem } from "@/store/batchQueueStore";
+import { createSegmentsFromText } from "@/lib/utils";
+import { formatTime, formatCompletionTime } from "@/lib/time-utils";
+import { EnhancedQueuedAudioItem } from "@/stores/batchQueueStore";
 
 // Type for the stored part results
 export type StoredPartResult = {

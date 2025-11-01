@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import logger from '@/utils/logger';
-import GroqBatchService, { BatchSubmissionItem } from '@/services/groq-batch-service';
+import logger from '@server/lib/logger';
+import GroqBatchService, { BatchSubmissionItem } from '@server/services/groq-batch-service';
 
 // Validation schema for batch submission
 const BatchSubmitSchema = z.object({

@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { ApiClient, DetailedTranscription, TranscriptionSegment } from '@/types';
 import { createSegmentsFromText } from '@/utils';
-import { AudioPart } from '@/utils/audio-utils';
+import { AudioPart } from '@/lib/audio-utils';
 // Import Node.js modules used in GroqClient server-side logic
 import fs from 'fs';
 import path from 'path';

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import logger from '@/utils/logger';
-import { batchJobQueries, batchItemQueries } from '@/lib/database';
+import logger from '@server/lib/logger';
+import { batchJobQueries, batchItemQueries } from '@server/database';
 import BlobCleanupService from '@/services/blob-cleanup-service';
 
 export async function DELETE(

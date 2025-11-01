@@ -1,4 +1,4 @@
-import logger from '@/utils/logger';
+import logger from '@server/lib/logger';
 
 export interface NotificationConfig {
   email?: string;

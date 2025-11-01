@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import logger from '@/utils/logger';
-import { batchJobQueries, batchItemQueries } from '@/lib/database';
-import BlobCleanupService from '@/services/blob-cleanup-service';
+import logger from '@server/lib/logger';
+import { batchJobQueries, batchItemQueries } from '@server/database';
+import BlobCleanupService from '@server/services/blob-cleanup-service';
 
 export async function POST(request: NextRequest) {
   const handlerLogger = logger.child({ route: '/api/batch/cleanup-blobs' });

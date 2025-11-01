@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import logger from '@/utils/logger';
+import logger from '@server/lib/logger';
 import { z } from "zod";
 
 // Define Zod schema for the request body

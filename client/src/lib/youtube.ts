@@ -1,7 +1,7 @@
 /**
  * Service for extracting audio from YouTube videos
  */
-import { MP3Quality, DEFAULT_MP3_QUALITY } from '@/utils/audio-utils';
+import { MP3Quality, DEFAULT_MP3_QUALITY } from '@/lib/audio-utils';
 
 export interface YouTubeVideoInfo {
   title: string;

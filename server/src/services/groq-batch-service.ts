@@ -3,9 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import logger from '@/utils/logger';
-import { BatchJob, BatchItem, batchJobQueries, batchItemQueries } from '@/lib/database';
-import { DetailedTranscription } from '@/types';
+import logger from '@server/lib/logger';
+import { BatchJob, BatchItem, batchJobQueries, batchItemQueries } from '@server/database';
+import { DetailedTranscription } from '@shared/types';
 
 // Groq batch service types
 export interface BatchSubmissionItem {
