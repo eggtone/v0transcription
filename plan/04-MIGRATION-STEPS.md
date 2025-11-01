@@ -5,6 +5,9 @@
 **Last Updated:** 2025-11-01
 
 ### Completed Phases:
+- ✅ **Phase 3:** Directory structure created
+- ✅ **Phase 4:** Shared types moved
+- ✅ **Phase 5:** Server code migrated (~7,000 lines)
 - ✅ **Phase 0:** Feature branch created (`refactor/separate-client-server`), database backed up
 - ✅ **Phase 1:** Legacy code deletion complete (~2,700 lines removed)
   - Deleted: test endpoints, quality test, legacy AudioTranscription, summarization feature, audio-worker
