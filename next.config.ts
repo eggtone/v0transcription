@@ -8,10 +8,8 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
 
-  // Point Next.js to client source for pages
-  experimental: {
-    outputFileTracingRoot: __dirname,
-  },
+  // Point Next.js to client source for pages (moved from experimental)
+  outputFileTracingRoot: __dirname,
 
   // Add environment variables
   env: {
