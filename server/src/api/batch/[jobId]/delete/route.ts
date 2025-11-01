@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import logger from '@server/lib/logger';
 import { batchJobQueries, batchItemQueries } from '@server/database';
-import BlobCleanupService from '@/services/blob-cleanup-service';
+import BlobCleanupService from '@server/services/blob-cleanup-service';
 
 export async function DELETE(
   request: NextRequest, 
@@ -22,7 +22,7 @@ export async function DELETE(
     }
 
     // Check if job exists
-    const job = batchJobQueries.findById.get(jobId);
+    const job = batchJobQueries.findById.get(jobId) as any;
     if (!job) {
       handlerLogger.warn('[BatchDelete] Job not found');
       return NextResponse.json(
@@ -41,10 +41,10 @@ export async function DELETE(
     }
 
     // Get related items before deletion for blob cleanup
-    const items = batchItemQueries.findByBatchId.all(jobId);
-    handlerLogger.info('[BatchDelete] Found items to delete', { 
+    const items = batchItemQueries.findByBatchId.all(jobId) as any[];
+    handlerLogger.info('[BatchDelete] Found items to delete', {
       itemCount: items.length,
-      items: items.map(item => ({
+      items: items.map((item: any) => ({
         id: item.id,
         filename: item.filename,
         original_filename: item.original_filename,
@@ -56,12 +56,12 @@ export async function DELETE(
     if (items.length > 0) {
       handlerLogger.info('[BatchDelete] Starting blob cleanup');
       try {
-        const cleanupResult = await BlobCleanupService.cleanupBatchJobBlobs(items);
+        const cleanupResult = await BlobCleanupService.cleanupBatchJobBlobs(items as any);
         handlerLogger.info('[BatchDelete] Blob cleanup completed', {
           deleted: cleanupResult.deleted.length,
           failed: cleanupResult.failed.length
         });
-        
+
         if (cleanupResult.failed.length > 0) {
           handlerLogger.warn('[BatchDelete] Some blobs failed to delete', {
             failedUrls: cleanupResult.failed

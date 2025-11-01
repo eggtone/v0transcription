@@ -18,7 +18,7 @@ export async function GET(
     // db is already imported
     
     // Check if batch job exists
-    const batchJob = db.prepare('SELECT * FROM batch_jobs WHERE id = ?').get(jobId);
+    const batchJob = db.prepare('SELECT * FROM batch_jobs WHERE id = ?').get(jobId) as any;
     if (!batchJob) {
       return NextResponse.json(
         { error: 'Batch job not found' },

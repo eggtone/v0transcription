@@ -5,7 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import { v4 as uuidv4 } from 'uuid'; // For request ID
 import logger from '@server/lib/logger'; // Import logger
-import { isValidYouTubeUrl } from '@/services/youtube';
+import { isValidYouTubeUrl } from '@server/services/youtube';
 import { MP3Quality, DEFAULT_MP3_QUALITY } from '@server/lib/audio-utils';
 import { z } from "zod"; // Import Zod
 

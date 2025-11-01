@@ -101,6 +101,8 @@ export interface QueuedAudioItem {
       totalItems: number;
       playlistId: string;
     };
+    blobUrl?: string; // Vercel Blob URL for batch processing
+    };
   };
 } 
 

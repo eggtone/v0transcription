@@ -18,7 +18,7 @@ export async function GET(
     }
 
     // Get the batch job to check its status
-    const batchJob = batchJobQueries.findById.get(jobId);
+    const batchJob = batchJobQueries.findById.get(jobId) as any;
     if (!batchJob) {
       return NextResponse.json(
         { error: 'Batch job not found' },
@@ -27,7 +27,7 @@ export async function GET(
     }
 
     // Get all items for this batch job
-    const allItems = batchItemQueries.findByBatchId.all(jobId);
+    const allItems = batchItemQueries.findByBatchId.all(jobId) as any[];
     
     if (allItems.length === 0) {
       return NextResponse.json(
@@ -38,7 +38,7 @@ export async function GET(
 
     // Filter for failed and pending items (pending items from completed jobs are effectively failed)
     const isCompletedJob = batchJob.status === 'completed';
-    const failedItems = allItems.filter(item => 
+    const failedItems = allItems.filter((item: any) =>
       item.status === 'failed' || (isCompletedJob && item.status === 'pending')
     );
     
@@ -48,7 +48,7 @@ export async function GET(
     });
 
     // Return detailed information about failed items
-    const failedItemsDetails = failedItems.map(item => ({
+    const failedItemsDetails = failedItems.map((item: any) => ({
       id: item.id,
       custom_id: item.custom_id,
       filename: item.filename,
@@ -63,10 +63,10 @@ export async function GET(
     // Also get summary statistics
     const summary = {
       total: allItems.length,
-      completed: allItems.filter(item => item.status === 'completed').length,
+      completed: allItems.filter((item: any) => item.status === 'completed').length,
       failed: failedItems.length,
-      pending: allItems.filter(item => item.status === 'pending').length,
-      processing: allItems.filter(item => item.status === 'processing').length
+      pending: allItems.filter((item: any) => item.status === 'pending').length,
+      processing: allItems.filter((item: any) => item.status === 'processing').length
     };
 
     return NextResponse.json({

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { NotificationService, BatchNotification } from '@/services/notification-service';
+import { NotificationService, BatchNotification } from '@server/services/notification-service';
 import logger from '@server/lib/logger';
 import { z } from 'zod';
 

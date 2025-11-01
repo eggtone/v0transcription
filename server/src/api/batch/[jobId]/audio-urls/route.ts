@@ -18,7 +18,7 @@ export async function GET(
     }
 
     // Get batch items with their blob URLs
-    const items = batchItemQueries.findByBatchId.all(jobId);
+    const items = batchItemQueries.findByBatchId.all(jobId) as any[];
     
     if (items.length === 0) {
       return NextResponse.json(
@@ -28,11 +28,11 @@ export async function GET(
     }
 
     // Return mapping of original filename to blob URL
-    const audioUrls = items.map(item => ({
+    const audioUrls = items.map((item: any) => ({
       originalFilename: item.original_filename,
       blobUrl: item.filename, // The filename field contains the blob URL
       status: item.status
-    })).filter(item => 
+    })).filter((item: any) =>
       // Only return items that have blob URLs (start with https)
       item.blobUrl && item.blobUrl.startsWith('https://')
     );

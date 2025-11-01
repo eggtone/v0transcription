@@ -3,7 +3,6 @@ import { toast } from "sonner";
 import { TranscriptionSegment, DetailedTranscription } from "@shared/types";
 import { createSegmentsFromText } from "@server/lib/utils";
 import { formatTime, formatCompletionTime } from "@server/lib/time-utils";
-import { EnhancedQueuedAudioItem } from "@/store/batchQueueStore";
 
 // Type for the stored part results
 export type StoredPartResult = {
@@ -18,7 +17,7 @@ export type StoredPartResult = {
  */
 export interface SplitAudioState {
   itemId: string; // ID of the item being processed
-  updateItemInStore: (id: string, updates: Partial<EnhancedQueuedAudioItem>) => void; // Callback to update store
+  updateItemInStore: (id: string, updates: Partial<any>) => void; // Callback to update store
   setIsTranscribingParts: (isTranscribing: boolean) => void;
   setIsTranscribing: (isTranscribing: boolean) => void;
   setError: (error: string | null) => void;

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import logger from '@server/lib/logger';
 import { batchJobQueries, batchItemQueries } from '@server/database';
-import BlobCleanupService from '@/services/blob-cleanup-service';
+import BlobCleanupService from '@server/services/blob-cleanup-service';
+import db from '@server/database';
 
 export async function POST(request: NextRequest) {
   const handlerLogger = logger.child({ route: '/api/batch/cleanup-blobs' });
@@ -15,12 +16,12 @@ export async function POST(request: NextRequest) {
     const cutoffDate = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString();
     
     // Get old completed/failed jobs
-    const oldJobs = batchJobQueries.db.prepare(`
+    const oldJobs = db.prepare(`
       SELECT id, status, created_at, completed_at
-      FROM batch_jobs 
+      FROM batch_jobs
       WHERE status IN ('completed', 'failed', 'expired')
       AND (completed_at < ? OR (completed_at IS NULL AND created_at < ?))
-    `).all(cutoffDate, cutoffDate);
+    `).all(cutoffDate, cutoffDate) as any[];
 
     handlerLogger.info('[BlobCleanup] Found old jobs for cleanup', { 
       jobCount: oldJobs.length,
@@ -35,8 +36,8 @@ export async function POST(request: NextRequest) {
     for (const job of oldJobs) {
       try {
         // Get items for this job
-        const items = batchItemQueries.findByBatchId.all(job.id);
-        
+        const items = batchItemQueries.findByBatchId.all(job.id) as any[];
+
         if (items.length > 0) {
           handlerLogger.info('[BlobCleanup] Cleaning up blobs for job', {
             jobId: job.id,
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest) {
             itemCount: items.length
           });
 
-          const result = await BlobCleanupService.cleanupBatchJobBlobs(items);
+          const result = await BlobCleanupService.cleanupBatchJobBlobs(items as any);
           
           totalDeleted += result.deleted.length;
           totalFailed += result.failed.length;
@@ -102,16 +103,16 @@ export async function GET(request: NextRequest) {
   
   try {
     // Get stats about blob usage
-    const allJobs = batchJobQueries.listAll.all(1000); // Get up to 1000 jobs
-    const completedJobs = allJobs.filter(job => ['completed', 'failed', 'expired'].includes(job.status));
-    
+    const allJobs = batchJobQueries.listAll.all(1000) as any[]; // Get up to 1000 jobs
+    const completedJobs = allJobs.filter((job: any) => ['completed', 'failed', 'expired'].includes(job.status));
+
     let totalItems = 0;
     let estimatedBlobCount = 0;
 
     for (const job of completedJobs) {
-      const items = batchItemQueries.findByBatchId.all(job.id);
+      const items = batchItemQueries.findByBatchId.all((job as any).id) as any[];
       totalItems += items.length;
-      estimatedBlobCount += items.filter(item => item.filename && item.filename.startsWith('https://')).length;
+      estimatedBlobCount += items.filter((item: any) => item.filename && item.filename.startsWith('https://')).length;
     }
 
     return NextResponse.json({

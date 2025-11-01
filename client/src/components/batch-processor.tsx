@@ -35,7 +35,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { formatTime, formatExtractionCompletionTime, timeStringToSeconds } from "@/lib/time-utils";
 import { formatFileSize, getAudioDuration, MP3Quality, DEFAULT_MP3_QUALITY } from "@/lib/audio-utils";
-import { isValidYouTubeUrl, extractPlaylistId } from "@shared/types";
+import { isValidYouTubeUrl, extractPlaylistId } from "@/lib/youtube";
 import JSZip from "jszip";
 import {
   DndContext,

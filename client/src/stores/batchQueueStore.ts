@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 // Import base type from central location
-import { QueuedAudioItem, DetailedTranscription, TranscriptionSegment } from '@/types';
+import { QueuedAudioItem, DetailedTranscription, TranscriptionSegment } from '@shared/types';
 
 // Interface extending QueuedAudioItem for store state
 export interface EnhancedQueuedAudioItem extends QueuedAudioItem {

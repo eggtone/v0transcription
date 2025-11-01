@@ -1,12 +1,19 @@
 import OpenAI from 'openai';
-import { ApiClient, DetailedTranscription, TranscriptionSegment } from '@/types';
-import { createSegmentsFromText } from '@/utils';
+import { ApiClient, DetailedTranscription, TranscriptionSegment } from '@shared/types';
+import { createSegmentsFromText } from '@/lib/utils';
 import { AudioPart } from '@/lib/audio-utils';
 // Import Node.js modules used in GroqClient server-side logic
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import logger from '@/utils/logger'; // Import logger
+
+// Simple logger for client-side (use console instead of pino)
+const logger = {
+  info: (...args: any[]) => console.log(...args),
+  debug: (...args: any[]) => console.debug(...args),
+  warn: (...args: any[]) => console.warn(...args),
+  error: (...args: any[]) => console.error(...args),
+};
 
 // Standardized base temporary directory
 const BASE_TEMP_DIR = path.join(os.tmpdir(), "transcriptor-temp");

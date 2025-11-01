@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import logger from '@server/lib/logger';
-import GroqBatchService from '@/services/groq-batch-service';
+import GroqBatchService from '@server/services/groq-batch-service';
 import JSZip from 'jszip';
 
 export async function GET(
@@ -122,12 +122,12 @@ function handleTextFormat(completedItems: any[], jobId: string) {
   let textContent = `Batch Transcription Results - Job ID: ${jobId}\n`;
   textContent += `Generated: ${new Date().toISOString()}\n`;
   textContent += `Completed Items: ${completedItems.length}\n\n`;
-  textContent += '=' * 80 + '\n\n';
+  textContent += '='.repeat(80) + '\n\n';
 
   completedItems.forEach((item, index) => {
     const transcription = JSON.parse(item.result);
     textContent += `File ${index + 1}: ${item.original_filename}\n`;
-    textContent += '-' * 40 + '\n';
+    textContent += '-'.repeat(40) + '\n';
     textContent += `${transcription.text}\n\n`;
     
     if (transcription.segments && transcription.segments.length > 0) {
@@ -140,7 +140,7 @@ function handleTextFormat(completedItems: any[], jobId: string) {
       textContent += '\n';
     }
     
-    textContent += '=' * 80 + '\n\n';
+    textContent += '='.repeat(80) + '\n\n';
   });
 
   return new NextResponse(textContent, {
@@ -184,7 +184,7 @@ async function handleZipFormat(completedItems: any[], failedItems: any[], jobId:
     
     if (transcription.segments && transcription.segments.length > 0) {
       textContent += 'Detailed Timestamps:\n';
-      textContent += '-' * 30 + '\n';
+      textContent += '-'.repeat(30) + '\n';
       transcription.segments.forEach((segment: any) => {
         const startTime = formatTime(segment.start);
         const endTime = formatTime(segment.end);

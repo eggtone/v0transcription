@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { batchItemQueries, batchJobQueries } from '@server/database';
 import { del } from '@vercel/blob';
 import logger from '@server/lib/logger';
-import GroqBatchService, { BatchSubmissionItem } from '@/services/groq-batch-service';
+import GroqBatchService, { BatchSubmissionItem } from '@server/services/groq-batch-service';
 
 export async function POST(
   request: NextRequest, 
@@ -23,7 +23,7 @@ export async function POST(
     const { model, completionWindow = '24h', itemIds } = body;
 
     // Get the original batch job to copy settings
-    const originalJob = batchJobQueries.findById.get(jobId);
+    const originalJob = batchJobQueries.findById.get(jobId) as any;
     if (!originalJob) {
       return NextResponse.json(
         { error: 'Original batch job not found' },
@@ -32,7 +32,7 @@ export async function POST(
     }
 
     // Get all items for this batch job
-    const allItems = batchItemQueries.findByBatchId.all(jobId);
+    const allItems = batchItemQueries.findByBatchId.all(jobId) as any[];
     
     // Determine which items to retry
     let itemsToRetry;

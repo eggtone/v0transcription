@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Play, StopCircle } from "lucide-react";
 import { ProcessingModeSelector } from "@/components/processing-mode-selector";
-import { useBatchQueueStore } from "@/stores/batchQueueStore";
+import { useBatchQueueStore, EnhancedQueuedAudioItem } from "@/stores/batchQueueStore";
 import { MP3Quality, DEFAULT_MP3_QUALITY } from "@/lib/audio-utils";
 import { ProcessingStrategyFactory, ProcessingStrategy } from "@/strategies/processing-strategy";
 import { OnDemandProcessor } from "@/strategies/on-demand-processor";
@@ -156,7 +156,7 @@ export function AudioQueueManager({
             <label className="text-sm font-medium">Audio Quality (YouTube)</label>
             <select 
               value={selectedQuality}
-              onChange={(e) => setSelectedQuality(e.target.value as MP3Quality)}
+              onChange={(e) => setSelectedQuality(Number(e.target.value) as MP3Quality)}
               className="w-full p-2 border rounded-md"
             >
               <option value="high">High Quality (320kbps)</option>

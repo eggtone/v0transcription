@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { v4 as uuidv4 } from 'uuid'; // For request ID
 import logger from '@server/lib/logger'; // Import logger
-import { runTranscription } from '@/services/transcription-service'; // Import the new service
+import { runTranscription } from '@server/services/transcription-service'; // Import the new service
 import { z } from "zod"; // Import Zod
 
 // Define Zod schema for expected FormData fields

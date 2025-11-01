@@ -75,7 +75,7 @@ export class BatchPoller {
       logger.debug({ activeJobCount: activeJobs.length }, '[BatchPoller] Polling active batch jobs');
 
       // Check status for each active job
-      const promises = activeJobs.map(job => this.pollSingleJob(job.id as string));
+      const promises = activeJobs.map((job: any) => this.pollSingleJob(job.id as string));
       await Promise.allSettled(promises);
 
     } catch (error) {

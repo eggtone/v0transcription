@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import logger from '@server/lib/logger';
-import { BatchPoller } from '@/services/batch-poller';
+import { BatchPoller } from '@server/services/batch-poller';
 
 // GET - Get poller status
 export async function GET(request: NextRequest) {

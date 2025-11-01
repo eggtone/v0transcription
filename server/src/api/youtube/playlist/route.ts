@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { spawn } from "child_process";
-import { isValidYouTubeUrl } from '@/services/youtube';
+import { isValidYouTubeUrl } from '@server/services/youtube';
 
 // A server-side wrapper class for yt-dlp operations
 class YTDlpWrap {
