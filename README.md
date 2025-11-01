@@ -138,22 +138,53 @@ Visit `http://localhost:3000` to access the application.
 
 ## 🏗️ Architecture
 
-### Core Components
-- **Next.js 15**: App Router with React Server Components
-- **TypeScript**: Full type safety
-- **SQLite**: Local database with better-sqlite3
-- **Zustand**: State management for queue operations
-- **Tailwind CSS**: Styling with shadcn/ui components
+This application uses a **modular monorepo** architecture with clear separation between client, server, and shared code:
 
-### Processing Strategies
-- **Strategy Pattern**: Pluggable processing architectures
-- **On-Demand Processor**: Real-time processing with immediate results
-- **Groq Batch Processor**: Cost-effective batch processing with 50% savings
+```
+┌─────────────────────────────────────────┐
+│  Browser (client/)                      │
+│  ├─ React Components                    │
+│  ├─ Zustand Store                       │
+│  └─ API Calls ──────────────┐          │
+└─────────────────────────────│───────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────┐
+│  Next.js API Routes (server/)           │
+│  ├─ Business Logic (services/)          │
+│  ├─ Database (SQLite)                   │
+│  ├─ External APIs (Groq, YouTube)       │
+│  └─ Processing Strategies               │
+└─────────────────────────────────────────┘
+                              │
+                              ▼
+                   ┌──────────────────┐
+                   │  shared/types/   │
+                   └──────────────────┘
+```
 
-### File Management
-- **Vercel Blob Storage**: Public file hosting for batch processing
-- **Automatic Cleanup**: Temporary file and blob storage management
-- **Smart Segmentation**: Intelligent audio splitting for large files
+### Module Boundaries
+
+**TypeScript enforces strict import rules:**
+- `client/` can import: `shared/types`, other `client/` files
+- `server/` can import: `shared/types`, other `server/` files
+- `shared/` imports: NOTHING (types only, no implementations)
+- **Client CANNOT import server** (compile error)
+- **Server CANNOT import client** (compile error)
+
+### Core Technologies
+- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS, shadcn/ui, Zustand
+- **Backend**: Node.js, Next.js API Routes, SQLite (better-sqlite3)
+- **Processing**: Local Whisper (Python), Groq API, FFmpeg
+- **External Services**: YouTube (yt-dlp), Vercel Blob Storage
+
+### Key Patterns
+- **Strategy Pattern**: Pluggable processing implementations (OnDemandProcessor, GroqBatchProcessor)
+- **State Management**: Zustand store with localStorage persistence
+- **Database**: SQLite with WAL mode for concurrent access
+- **File Management**: Smart segmentation, automatic cleanup, blob storage integration
+
+For detailed architecture documentation, see [CLAUDE.md](CLAUDE.md)
 
 ## 🔧 Configuration
 
@@ -176,23 +207,50 @@ const groqModels = ['groq-distil-whisper', 'groq-whisper-large-v3', 'groq-whispe
 ## 📁 Project Structure
 
 ```
-src/
-├── app/api/           # API routes
-│   ├── batch/         # Batch processing endpoints
-│   ├── transcribe/    # Transcription endpoints
-│   └── youtube/       # YouTube integration
-├── components/        # React components
-│   ├── ui/           # shadcn/ui components
-│   └── batch-*       # Batch processing components
-├── services/         # Business logic
-│   ├── groq-batch-service.ts
-│   ├── whisper.ts
-│   └── youtube.ts
-├── strategies/       # Processing strategies
-├── store/           # Zustand state management
-├── utils/           # Utility functions
-└── types/           # TypeScript definitions
+v0transcription/
+├── client/                    # Frontend module
+│   └── src/
+│       ├── app/              # Next.js pages
+│       ├── components/       # React components
+│       │   ├── ui/          # shadcn/ui base components
+│       │   └── batch-*      # Batch processing UI
+│       ├── stores/          # Zustand state management
+│       └── lib/             # Client utilities
+│
+├── server/                    # Backend module
+│   └── src/
+│       ├── api/             # Business logic
+│       │   ├── batch/       # Batch processing
+│       │   ├── transcribe/  # Transcription
+│       │   └── youtube/     # YouTube integration
+│       ├── services/        # External service integrations
+│       │   ├── whisper.ts   # Local Whisper
+│       │   ├── groq-batch-service.ts
+│       │   └── youtube.ts
+│       ├── strategies/      # Processing strategies
+│       ├── database/        # SQLite database layer
+│       └── lib/            # Server utilities
+│
+├── shared/                   # Shared types module
+│   └── types/
+│       └── index.ts         # TypeScript type definitions
+│
+├── src/app/api/             # Next.js API routes (import from server/)
+├── data/                    # SQLite database
+├── plan/                    # Refactoring documentation
+├── CLAUDE.md               # AI agent guidance (root)
+├── client/CLAUDE.md        # Frontend-specific guidance
+├── server/CLAUDE.md        # Backend-specific guidance
+└── shared/CLAUDE.md        # Type definition guidance
 ```
+
+### Module Documentation
+
+Each module has its own CLAUDE.md file with specific development guidance:
+- **[CLAUDE.md](CLAUDE.md)** - Project overview and navigation
+- **[client/CLAUDE.md](client/CLAUDE.md)** - Frontend development patterns
+- **[server/CLAUDE.md](server/CLAUDE.md)** - Backend development patterns
+- **[shared/CLAUDE.md](shared/CLAUDE.md)** - Type definition standards
 
 ## 🔒 Security & Privacy
 
