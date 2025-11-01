@@ -6,7 +6,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Play, StopCircle, Download, FileDown, Loader2, Archive, FileText, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
-import AudioTranscription from "@/components/audio-transcription";
 import AudioQueueManager from "@/components/audio-queue-manager";
 import { formatTime, formatCompletionTime, ProcessTimer } from "@/utils/time-utils";
 import { Progress } from "@/components/ui/progress";
@@ -33,7 +32,6 @@ export default function BatchTranscription() {
     getItemById
   } = useBatchQueueStore();
 
-  const [activeMode, setActiveMode] = useState<"single" | "queue">("queue");
   const [currentBatchItemIndex, setCurrentBatchItemIndex] = useState<number | null>(null);
   const [batchProgress, setBatchProgress] = useState(0);
   const [batchElapsedTime, setBatchElapsedTime] = useState(0);
