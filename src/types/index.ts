@@ -90,3 +90,53 @@ export interface QueuedAudioItem {
     };
   };
 } 
+
+/**
+ * Progress tracking interface for UI updates (from shared-types.ts)
+ */
+export interface ProgressTracker {
+  setProgress: (percent: number) => void;
+  setElapsedTime?: (seconds: number) => void;
+  progress?: number;
+  elapsedTime?: number;
+}
+
+/**
+ * Audio source state for components (from shared-types.ts)
+ */
+export interface AudioSourceState {
+  audioFile?: File | null;
+  audioUrl?: string | null;
+  audioFileName?: string | null;
+  isExtracting?: boolean;
+  youtubeVideoInfo?: YouTubeVideoInfo | null;
+  youtubeError?: string | null;
+  setAudioFile?: (file: File | null) => void;
+  setAudioUrl?: (url: string | null) => void;
+  setAudioFileName?: (name: string | null) => void;
+  setIsExtracting?: (isExtracting: boolean) => void;
+  setYoutubeVideoInfo?: (info: YouTubeVideoInfo | null) => void;
+  setYoutubeError?: (error: string | null) => void;
+}
+
+/**
+ * Transcription state extending audio source state (from shared-types.ts)
+ */
+export interface TranscriptionState extends AudioSourceState {
+  isTranscribing?: boolean;
+  transcriptionProgress?: number;
+  elapsedTime?: number;
+  selectedModel?: string;
+  languageModelOptions?: string[];
+  currentPart?: number;
+  totalParts?: number;
+  transcriptionError?: string | null;
+  setIsTranscribing?: (isTranscribing: boolean) => void;
+  setTranscriptionProgress?: (progress: number) => void;
+  setElapsedTime?: (time: number) => void;
+  setSelectedModel?: (model: string) => void;
+  setLanguageModelOptions?: (options: string[]) => void;
+  setCurrentPart?: (part: number) => void;
+  setTotalParts?: (total: number) => void;
+  setTranscriptionError?: (error: string | null) => void;
+}
