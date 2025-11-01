@@ -72,6 +72,34 @@ export function formatExtractionCompletionTime(seconds: number, progress?: numbe
 }
 
 /**
+ * Converts a time string in "MM:SS" or "HH:MM:SS" format to seconds
+ * @param timeString Time string to convert
+ * @returns Number of seconds
+ */
+export function timeStringToSeconds(timeString: string): number | null {
+  if (!timeString) return null;
+
+  // Handle "HH:MM:SS" format
+  const hhmmssMatch = timeString.match(/^(\d+):(\d+):(\d+)$/);
+  if (hhmmssMatch) {
+    const hours = parseInt(hhmmssMatch[1], 10);
+    const minutes = parseInt(hhmmssMatch[2], 10);
+    const seconds = parseInt(hhmmssMatch[3], 10);
+    return (hours * 3600) + (minutes * 60) + seconds;
+  }
+
+  // Handle "MM:SS" format 
+  const mmssMatch = timeString.match(/^(\d+):(\d+)$/);
+  if (mmssMatch) {
+    const minutes = parseInt(mmssMatch[1], 10);
+    const seconds = parseInt(mmssMatch[2], 10);
+    return (minutes * 60) + seconds;
+  }
+
+  return null;
+}
+
+/**
  * A utility class for managing process timers
  * Provides consistent time tracking across the application
  */

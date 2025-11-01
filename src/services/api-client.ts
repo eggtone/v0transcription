@@ -2,6 +2,14 @@ import OpenAI from 'openai';
 import { ApiClient, DetailedTranscription, TranscriptionSegment } from '@/types';
 import { createSegmentsFromText } from '@/utils';
 import { AudioPart } from '@/utils/audio-utils';
+// Import Node.js modules used in GroqClient server-side logic
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import logger from '@/utils/logger'; // Import logger
+
+// Standardized base temporary directory
+const BASE_TEMP_DIR = path.join(os.tmpdir(), "transcriptor-temp");
 
 /**
  * Transcribe audio using either the server API or directly with client-side libraries
@@ -90,11 +98,18 @@ export class GroqClient implements ApiClient {
     const modelMap: Record<string, string> = {
       'groq-distil-whisper': 'distil-whisper-large-v3-en',
       'groq-whisper-large-v3': 'whisper-large-v3',
-      'groq-whisper-large-v3-turbo': 'whisper-large-v3-turbo'    };
+      'groq-whisper-large-v3-turbo': 'whisper-large-v3-turbo'
+    };
 
-    this.model = modelMap[model] || 'whisper-large-v3';
+    // Validate the model is supported
+    if (!modelMap[model]) {
+      logger.error({ model }, `[GroqClient] Unsupported Groq model requested`);
+      throw new Error(`Unsupported Groq model: "${model}". Valid options are: ${Object.keys(modelMap).join(', ')}`);
+    }
+
+    this.model = modelMap[model];
     
-    console.log(`Mapped model ${model} to Groq model: ${this.model}`);
+    logger.debug({ requestedModel: model, mappedModel: this.model }, `[GroqClient] Initialized`);
     
     this.client = new OpenAI({
       apiKey: process.env.GROQ_API_KEY || '',
@@ -103,88 +118,81 @@ export class GroqClient implements ApiClient {
   }
 
   async transcribeAudio(audioData: Buffer, filename: string): Promise<DetailedTranscription> {
+    logger.info({ filename, model: this.model }, `[GroqClient] Starting transcription`);
+    
+    if (!process.env.GROQ_API_KEY) {
+      logger.error('[GroqClient] GROQ_API_KEY is not set');
+      throw new Error('[GroqClient] GROQ_API_KEY is not set in environment variables.');
+    }
+
+    // Ensure the base temp directory exists
+    if (!fs.existsSync(BASE_TEMP_DIR)) {
+      try {
+        logger.debug(`[GroqClient] Creating base temp directory: ${BASE_TEMP_DIR}`);
+        fs.mkdirSync(BASE_TEMP_DIR, { recursive: true });
+      } catch (err) {
+        if (!fs.existsSync(BASE_TEMP_DIR)) {
+             logger.error({ path: BASE_TEMP_DIR, error: err }, '[GroqClient] Failed to create base temp directory');
+             throw err; // Re-throw if creation failed
+        }
+        // Ignore error if it already exists (race condition)
+        logger.warn(`[GroqClient] Base temp directory already existed despite check: ${BASE_TEMP_DIR}`);
+      }
+    }
+    
+    // Create a unique temporary file path within the standardized directory
+    const safeFilename = filename.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const tempFilePath = path.join(BASE_TEMP_DIR, `groq_${Date.now()}_${safeFilename}`);
+    let transcription: any;
+
     try {
-      console.log(`Using Groq with model: ${this.model}`);
+      // Write buffer to temporary file
+      fs.writeFileSync(tempFilePath, audioData);
+      logger.debug(`[GroqClient] Temporary file created: ${tempFilePath}`);
+
+      // Create a read stream for the API call
+      const fileStream = fs.createReadStream(tempFilePath);
+
+      // Call the Groq API
+      logger.debug(`[GroqClient] Calling Groq API...`);
+      transcription = await this.client.audio.transcriptions.create({
+        file: fileStream,
+        model: this.model,
+        response_format: 'verbose_json'
+      });
       
-      if (!process.env.GROQ_API_KEY) {
-        throw new Error('GROQ_API_KEY is not set. Please add it to your environment variables.');
+      logger.info(`[GroqClient] Groq transcription successful`);
+      
+      // Convert the Groq response
+      const result: DetailedTranscription = {
+        text: transcription.text || '',
+        language: transcription.language || 'en',
+        segments: transcription.segments || [],
+        processingTime: 0 // Groq doesn't provide processing time
+      };
+      
+      // Segment fallback
+      if (!result.segments || result.segments.length === 0) {
+        logger.warn('[GroqClient] No segments in Groq response, creating from text.');
+        result.segments = createSegmentsFromText(result.text).segments;
       }
       
-      // For client-side, we need to use the API route
-      if (typeof window !== 'undefined') {
-        // We're on the client-side, so we need to use the API route
-        const formData = new FormData();
-        const blob = new Blob([audioData], { type: 'audio/wav' });
-        formData.append('file', blob, filename);
-        formData.append('model', this.model);
-        
-        const response = await fetch('/api/transcribe', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to transcribe audio');
-        }
-        
-        return await response.json();
-      } else {
-        // We're on the server-side, so we can use the Groq API directly
-        // This code only runs on the server
-        const fs = require('fs');
-        const path = require('path');
-        const os = require('os');
-        
-        // Create a temporary file to store the audio data
-        const tempDir = path.join(os.tmpdir(), 'groq-temp');
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
-        }
-        
-        const tempFilePath = path.join(tempDir, filename);
-        fs.writeFileSync(tempFilePath, audioData);
-        
-        try {
-          // Call the Groq API to transcribe the audio using the file path
-          const transcription = await this.client.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePath),
-            model: this.model,
-            response_format: 'verbose_json'
-          });
-          
-          console.log('Groq transcription complete');
-          
-          // Convert the Groq response to our DetailedTranscription format
-          const result: DetailedTranscription = {
-            text: transcription.text,
-            language: transcription.language || 'en',
-            segments: transcription.segments || [],
-            processingTime: 0  // Groq doesn't provide processing time
-          };
-          
-          // If no segments, create them from the text
-          if (!result.segments || result.segments.length === 0) {
-            console.log('No segments in Groq response, creating from text');
-            const textSegments = createSegmentsFromText(result.text);
-            result.segments = textSegments.segments;
-          }
-          
-          return result;
-        } finally {
-          // Clean up the temporary file
-          try {
-            if (fs.existsSync(tempFilePath)) {
-              fs.unlinkSync(tempFilePath);
-            }
-          } catch (cleanupErr) {
-            console.error('Error cleaning up temp file:', cleanupErr);
-          }
-        }
-      }
+      return result;
+
     } catch (error) {
-      console.error('Error transcribing with Groq:', error);
-      throw error;
+       logger.error({ filename, model: this.model, error }, '[GroqClient] Error during Groq API call or processing');
+       // Re-throw the error to be handled by the transcription service
+       throw error;
+    } finally {
+      // Clean up the temporary file
+      if (fs.existsSync(tempFilePath)) {
+        try {
+          fs.unlinkSync(tempFilePath);
+          logger.debug(`[GroqClient] Cleaned up temporary file: ${tempFilePath}`);
+        } catch (cleanupErr) {
+          logger.warn({ path: tempFilePath, error: cleanupErr }, `[GroqClient] Error cleaning up temp file`);
+        }
+      }
     }
   }
 }
@@ -198,5 +206,5 @@ export function createApiClient(model: string): ApiClient {
     return new GroqClient(model);
   }
   
-  throw new Error(`Unsupported model type: ${model}`);
+  throw new Error(`Unsupported API client type for model: ${model}`);
 } 

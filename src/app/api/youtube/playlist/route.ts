@@ -7,8 +7,11 @@ class YTDlpWrap {
   private ytdlpPath: string;
   
   constructor() {
-    // Use system yt-dlp if available
-    this.ytdlpPath = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+    // Read path from environment variable or use default
+    const defaultPath = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+    this.ytdlpPath = process.env.YT_DLP_EXECUTABLE_PATH || defaultPath;
+    // Basic console log here as no logger instance is readily available
+    console.log(`[YTDlpWrap - Playlist] Using yt-dlp executable path: ${this.ytdlpPath}`); 
   }
   
   /**
@@ -94,107 +97,104 @@ export async function GET(request: Request) {
     // Construct the playlist URL
     const playlistUrl = `https://www.youtube.com/playlist?list=${playlistId}`;
     
-    // Capture warnings/errors
-    let warnings: string[] = [];
+    // Initialize basic metadata
+    let playlistMetadata = {
+      title: 'YouTube Playlist',
+      uploader: 'Unknown Uploader', 
+      description: '',
+      webpage_url: playlistUrl,
+      entries_count: 0,
+      unavailable_count: 0
+    };
     
-    // First try to get playlist metadata to get an idea of how many videos total
-    // and see if there are warnings about unavailable videos
-    let playlistMetadata = {} as PlaylistMetadata;
-    let unavailableCount = 0;
-
-    try {
-      // Get playlist name and other metadata with --ignore-errors to continue despite errors
-      const playlistMetadataRaw = await ytdlp.exec([
-        playlistUrl,
-        '--dump-single-json',
-        '--no-progress',
-        '--ignore-errors', // Continue despite errors with individual videos
-      ], {
-        onError: (msg) => {
-          if (msg.includes("unavailable video")) {
-            unavailableCount++;
-            warnings.push(msg.trim());
-          }
-        }
-      });
-      
-      try {
-        const metadata = JSON.parse(playlistMetadataRaw) as PlaylistMetadata;
-        playlistMetadata = {
-          title: metadata.title || 'Unknown Playlist',
-          uploader: metadata.uploader || 'Unknown Uploader',
-          description: metadata.description || '',
-          webpage_url: metadata.webpage_url || playlistUrl,
-          entries_count: metadata.entries?.length || 0,
-          unavailable_count: unavailableCount
-        };
-      } catch (e) {
-        console.error('Error parsing playlist metadata:', e);
-        playlistMetadata = {
-          title: 'Unknown Playlist',
-          uploader: 'Unknown Uploader',
-          description: '',
-          webpage_url: playlistUrl,
-          entries_count: 0,
-          unavailable_count: unavailableCount
-        };
-      }
-    } catch (metadataError) {
-      console.error('Error fetching playlist metadata:', metadataError);
-      // Continue with what we have
-    }
-    
-    // Now get info for each available video in the playlist
-    // Using --flat-playlist to get only basic video info quickly
-    // and --ignore-errors to continue despite errors with individual videos
+    // Get playlist info using simplified approach with error handling
     const playlistInfoRaw = await ytdlp.exec([
       playlistUrl,
       '--dump-json',
       '--flat-playlist',
       '--no-progress',
-      '--ignore-errors', // Continue despite errors with individual videos
-    ], {
-      onError: (msg) => {
-        if (msg.includes("unavailable video")) {
-          warnings.push(msg.trim());
-        }
-      }
-    });
+      '--ignore-errors' // Continue despite errors with individual videos
+    ]);
     
-    // Parse JSON lines from ytdlp output
+    // Parse JSON lines from ytdlp output with graceful error handling
+    let unavailableCount = 0;
+    const warnings: string[] = [];
+    
     const videos = playlistInfoRaw
       .trim()
       .split('\n')
       .filter(line => line.trim() !== '')
-      .map(line => {
+      .map((line, index) => {
         try {
           const videoInfo = JSON.parse(line) as VideoInfo;
+          
+          // Check if video is unavailable or deleted
+          if (!videoInfo.id || videoInfo.title === '[Deleted video]' || videoInfo.title === '[Private video]') {
+            unavailableCount++;
+            const warningMsg = `Video ${index + 1} is unavailable (${videoInfo.title || 'Unknown reason'})`;
+            warnings.push(warningMsg);
+            console.warn(`[Playlist] ${warningMsg}`);
+            
+            return {
+              id: videoInfo.id || `unavailable-${index}`,
+              title: videoInfo.title || '[Unavailable Video]',
+              duration: null,
+              url: videoInfo.id ? `https://www.youtube.com/watch?v=${videoInfo.id}` : null,
+              unavailable: true,
+              reason: videoInfo.title === '[Deleted video]' ? 'deleted' : 
+                     videoInfo.title === '[Private video]' ? 'private' : 'unknown'
+            };
+          }
+          
           return {
             id: videoInfo.id,
             title: videoInfo.title || 'Unknown Title',
             duration: videoInfo.duration, 
             url: `https://www.youtube.com/watch?v=${videoInfo.id}`,
-            // Add other relevant fields as needed
+            unavailable: false
           };
         } catch (e) {
-          console.error('Error parsing video info:', e);
-          return null;
+          console.error('Error parsing video info:', e, 'Line:', line);
+          unavailableCount++;
+          const warningMsg = `Failed to parse video ${index + 1} data`;
+          warnings.push(warningMsg);
+          
+          return {
+            id: `parse-error-${index}`,
+            title: '[Parse Error]',
+            duration: null,
+            url: null,
+            unavailable: true,
+            reason: 'parse-error'
+          };
         }
       })
       .filter(Boolean);
     
-    // Update entries count if we determined it from the videos array
-    if (videos.length > 0 && playlistMetadata.entries_count === 0) {
-      playlistMetadata.entries_count = videos.length + unavailableCount;
-    }
+    // Update entries count and unavailable count
+    playlistMetadata.entries_count = videos.length;
+    playlistMetadata.unavailable_count = unavailableCount;
     
-    // Return available videos and any warnings about unavailable ones
+    // Separate available and unavailable videos for summary
+    const availableVideos = videos.filter(v => !v.unavailable);
+    const unavailableVideos = videos.filter(v => v.unavailable);
+    
+    // Return playlist data with detailed information
     return NextResponse.json({
       id: playlistId,
       ...playlistMetadata,
-      videos,
+      videos: videos, // Include all videos (available and unavailable)
+      available_count: availableVideos.length,
+      unavailable_count: unavailableCount,
       warnings: warnings.length > 0 ? warnings : undefined,
-      unavailable_count: unavailableCount
+      summary: {
+        total: videos.length,
+        available: availableVideos.length,
+        unavailable: unavailableCount,
+        deleted: unavailableVideos.filter(v => v.reason === 'deleted').length,
+        private: unavailableVideos.filter(v => v.reason === 'private').length,
+        errors: unavailableVideos.filter(v => v.reason === 'parse-error').length
+      }
     });
     
   } catch (error) {

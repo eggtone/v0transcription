@@ -1,15 +1,35 @@
 import { NextRequest, NextResponse } from "next/server"
 import { APIError } from "openai"
-import { openai } from "@/services/openai"
+import { v4 as uuidv4 } from 'uuid'
+import logger from '@/utils/logger'
+import { openai, getOpenAIApiKey } from "@/services/openai"
+import { z } from "zod"
 
-// Log API key status for debugging (without exposing the full key)
-const apiKey = process.env.OPENAI_API_KEY
-console.log(`OpenAI API Key status:`, {
-  defined: typeof apiKey !== 'undefined',
-  length: apiKey?.length || 0,
-  prefix: apiKey?.substring(0, 7) || 'missing',
-  // NEVER log the full API key
+// Define Zod schema for the request body
+const SummarizeRequestSchema = z.object({
+  text: z.string().min(1, "Transcription text cannot be empty"),
+  model: z.enum(["gpt-4o-mini", "gpt-4o"], { 
+    errorMap: () => ({ message: "Invalid model. Supported models: gpt-4o-mini, gpt-4o" })
+  }),
+  prompt: z.string().optional(), // Optional prompt string
 })
+
+// Log API key status once on startup (moved from top-level)
+// This is better than logging on every request if the key doesn't change.
+// Note: In serverless environments, this might still log frequently.
+try {
+  const keyInfo = getOpenAIApiKey()
+  logger.info(
+    { 
+      defined: Boolean(keyInfo),
+      length: keyInfo.length,
+      prefix: keyInfo.substring(0, 7) // Log prefix safely
+    },
+    "OpenAI API Key status on startup"
+  )
+} catch (error) {
+   logger.error({ error }, "OpenAI API Key not configured on startup")
+}
 
 /**
  * API route handler for summarizing transcription text
@@ -24,39 +44,34 @@ console.log(`OpenAI API Key status:`, {
  * @returns A JSON response with the generated summary
  */
 export async function POST(req: NextRequest) {
+  const requestId = uuidv4()
+  const handlerLogger = logger.child({ requestId, route: '/api/summarize' })
+
+  handlerLogger.info('Summarization request received')
+
   try {
-    // Parse request body
     const body = await req.json()
-    const { text, model, prompt } = body
 
-    // Validate required fields
-    if (!text) {
+    // Validate request body using Zod
+    const validationResult = SummarizeRequestSchema.safeParse(body)
+
+    if (!validationResult.success) {
+      handlerLogger.warn({ errors: validationResult.error.errors }, 'Invalid summarization request body')
       return NextResponse.json(
-        { error: "Missing transcription text" },
+        { error: "Invalid request body", details: validationResult.error.flatten() },
         { status: 400 }
       )
     }
 
-    if (!model) {
-      return NextResponse.json(
-        { error: "Missing model selection" },
-        { status: 400 }
-      )
-    }
-
-    // Validate model is supported
-    if (model !== "gpt-4o-mini" && model !== "gpt-4o") {
-      return NextResponse.json(
-        { error: "Unsupported model. Supported models: gpt-4o-mini, gpt-4o" },
-        { status: 400 }
-      )
-    }
+    // Use validated data
+    const { text, model, prompt } = validationResult.data
+    handlerLogger.debug({ model, hasPrompt: Boolean(prompt) }, 'Validated summarization request')
 
     // Create the full prompt with context and instructions
     let fullPrompt = prompt || "Summarize the following transcription:"
     fullPrompt += "\n\n" + text
 
-    console.log(`Sending request to OpenAI with model: ${model}`)
+    handlerLogger.info({ model }, `Sending request to OpenAI`)
 
     // Call OpenAI API to generate the summary
     const response = await openai.chat.completions.create({
@@ -78,18 +93,19 @@ export async function POST(req: NextRequest) {
     // Extract the summary from the response
     const summary = response.choices[0]?.message?.content?.trim() || ""
 
+    handlerLogger.info({ model, summaryLength: summary.length }, `OpenAI summarization successful`)
+
     // Return the summary
     return NextResponse.json({ summary })
   } catch (error: any) {
-    console.error("Error generating summary:", error)
+    handlerLogger.error({ err: error }, "Error generating summary")
     
     // Handle OpenAI API errors
     if (error instanceof APIError) {
-      console.error(`OpenAI API error details:`, {
-        status: error.status,
-        message: error.message,
-        type: error.type,
-      })
+      handlerLogger.error(
+        { status: error.status, message: error.message, type: error.type }, 
+        `OpenAI API error details`
+      )
       
       return NextResponse.json(
         { error: `OpenAI API error: ${error.message}` },

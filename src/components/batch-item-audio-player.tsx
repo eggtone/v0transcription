@@ -8,13 +8,11 @@ import { toast } from "sonner"
 interface BatchItemAudioPlayerProps {
   audioUrl: string
   audioFileName: string
-  onRefreshUrl?: () => Promise<string>
 }
 
 export function BatchItemAudioPlayer({ 
   audioUrl, 
-  audioFileName, 
-  onRefreshUrl
+  audioFileName
 }: BatchItemAudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -23,10 +21,6 @@ export function BatchItemAudioPlayer({
   const [hasError, setHasError] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [currentAudioUrl, setCurrentAudioUrl] = useState(audioUrl)
-  const lastRefreshTimeRef = useRef<number>(0)
-  const isRetryingRef = useRef<boolean>(false)
-  const retryCountRef = useRef<number>(0)
-  const MAX_RETRIES = 3
   
   // Reset state when audio URL changes
   useEffect(() => {
@@ -36,61 +30,7 @@ export function BatchItemAudioPlayer({
     setIsLoading(true)
     setHasError(false)
     setCurrentAudioUrl(audioUrl)
-    retryCountRef.current = 0
-    isRetryingRef.current = false
   }, [audioUrl])
-
-  // Handle URL refresh and retries
-  const handleRetry = useCallback(async () => {
-    // Avoid concurrent retries
-    if (isRetryingRef.current) return
-    
-    // Check retry count
-    if (retryCountRef.current >= MAX_RETRIES) return
-    
-    // Prevent frequent refreshes
-    const now = Date.now()
-    if (now - lastRefreshTimeRef.current < 3000) return
-    
-    isRetryingRef.current = true
-    setIsLoading(true)
-    setHasError(false)
-    
-    try {
-      if (onRefreshUrl) {
-        const newUrl = await onRefreshUrl()
-        lastRefreshTimeRef.current = Date.now()
-        
-        if (newUrl && newUrl !== currentAudioUrl) {
-          setCurrentAudioUrl(newUrl)
-          retryCountRef.current += 1
-        }
-      }
-      
-      // Always attempt to reload the audio element
-      if (audioRef.current) {
-        audioRef.current.load()
-      }
-    } catch (error) {
-      console.error("Error refreshing URL:", error)
-      setHasError(true)
-    } finally {
-      isRetryingRef.current = false
-    }
-  }, [currentAudioUrl, onRefreshUrl])
-
-  // Auto-retry for blob URL errors
-  useEffect(() => {
-    if (hasError && currentAudioUrl.startsWith('blob:') && onRefreshUrl && retryCountRef.current < MAX_RETRIES) {
-      const retryDelay = 500 + (retryCountRef.current * 500)
-      
-      const retryTimeout = setTimeout(() => {
-        handleRetry()
-      }, retryDelay)
-      
-      return () => clearTimeout(retryTimeout)
-    }
-  }, [hasError, currentAudioUrl, onRefreshUrl, handleRetry])
 
   // Audio element event handlers
   useEffect(() => {
@@ -123,11 +63,7 @@ export function BatchItemAudioPlayer({
       console.error("Audio error for:", audioFileName)
       setIsLoading(false)
       setHasError(true)
-      
-      // Don't show toast for blob errors as we'll auto-retry
-      if (!currentAudioUrl.startsWith('blob:') || !onRefreshUrl) {
-        toast.error("Error loading audio", { id: `audio-error-${audioFileName}` })
-      }
+      toast.error("Error loading audio", { id: `audio-error-${audioFileName}` })
     }
 
     audio.addEventListener('timeupdate', handleTimeUpdate)
@@ -160,12 +96,7 @@ export function BatchItemAudioPlayer({
         audioRef.current.play().catch(error => {
           console.error("Play error:", error)
           setHasError(true)
-          
-          if (currentAudioUrl.startsWith('blob:') && onRefreshUrl) {
-            handleRetry()
-          } else {
-            toast.error("Failed to play audio")
-          }
+          toast.error("Failed to play audio")
         })
       }
       setIsPlaying(!isPlaying)
@@ -222,17 +153,6 @@ export function BatchItemAudioPlayer({
           {isLoading ? "--:--" : formatTime(currentTime)} / {isLoading ? "--:--" : formatTime(duration)}
         </div>
       </div>
-      
-      {hasError && (
-        <Button 
-          variant="ghost" 
-          size="sm" 
-          onClick={handleRetry}
-          className="text-xs py-0 h-5 mt-1"
-        >
-          Retry
-        </Button>
-      )}
     </div>
   )
 } 
